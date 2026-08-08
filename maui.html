@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maui — Pixel Side Scroller</title>
+<style>
+  html, body {
+    margin: 0; height: 100%;
+    background: #2a1a2e;
+    display: flex; align-items: center; justify-content: center;
+    font-family: monospace; color: #ffeef5;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #wrap { text-align: center; }
+  canvas {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    background: #ffd9ec;
+    border: 4px solid #7a3b6e;
+    box-shadow: 0 0 24px rgba(0,0,0,.5);
+    width: 640px; height: auto; max-width: 96vw;
+    touch-action: none;
+  }
+  #hud { margin-top: 10px; font-size: 16px; letter-spacing: 1px; }
+  #hud b { color: #ff8fb0; }
+  .keys { margin-top: 4px; font-size: 13px; opacity: .7; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="320" height="180"></canvas>
+  <div id="hud">SCORE <b id="score">0</b> &nbsp; HEARTS <b id="coins">0</b>/<b id="coinsTotal">0</b> &nbsp; <span id="msg"></span></div>
+  <div class="keys">← → / A D move &nbsp;·&nbsp; SPACE / W / ↑ jump &nbsp;·&nbsp; R restart &nbsp;·&nbsp; M mute<br>mobile: tap left/right side to move, top of screen to jump</div>
+</div>
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const W = canvas.width, H = canvas.height;
+
+  // ---------- Pixel-art sprite factory ----------
+  function makeSprite(rows, palette, scale = 1) {
+    const h = rows.length, w = rows[0].length;
+    const c = document.createElement('canvas');
+    c.width = w * scale; c.height = h * scale;
+    const g = c.getContext('2d');
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const ch = rows[y][x];
+        if (ch === '.' || ch === ' ') continue;
+        g.fillStyle = palette[ch] || '#f0f';
+        g.fillRect(x * scale, y * scale, scale, scale);
+      }
+    }
+    return c;
+  }
+  const S2 = 2; // sprites drawn at 2x. All character grids are 18 wide x 22 tall.
+
+  // =====================================================================
+  //  HERO — pink pajamas (starting form). Head + torso + 2 arms + 2 legs.
+  // =====================================================================
+  const pjPal = { H:'#5a3324', S:'#ffcb8e', E:'#2b2b3a', m:'#d1607f', p:'#ff9ec2', q:'#e87aa6', f:'#ffd7e6' };
+  const pjIdleRows = [
+    "......HHHHHH......",
+    ".....HHHHHHHH.....",
+    "....HHHHHHHHHH....",
+    "....HHSSSSSSHH....",
+    "....HSSSSSSSSH....",
+    "....HSSEssEsSH....",
+    "....HSSSSSSSSH....",
+    ".....SSmmSS.......",
+    "......SSSS........",
+    "...pppppppppppp...",
+    "...pp.pppppp.pp...",
+    "...pp.pqqqqp.pp...",
+    "...pp.pppppp.pp...",
+    "...SS.pppppp.SS...",
+    "......pppppp......",
+    "......pppppp......",
+    "......pp..pp......",
+    "......pp..pp......",
+    "......pp..pp......",
+    "......pp..pp......",
+    ".....ppp..ppp.....",
+    ".....fff..fff.....",
+  ];
+  // Run A: left arm forward/up, right arm back; right leg forward, left leg trailing
+  const pjRunARows = pjIdleRows.slice(0, 9).concat([
+    "...pppppppppppp...",
+    "..Spp.pppppp.pp...",
+    "...pp.pqqqqp.pp...",
+    "...pp.pppppp.pSS..",
+    "...pp.pppppp.pp...",
+    "......pppppp......",
+    "......pppppp......",
+    "......pp..pp......",
+    "......pp...pp.....",
+    ".....pp.....ppp...",
+    "....pp.......pp...",
+    "...ppp.......pp...",
+    "..fff.........ff..",
+  ]);
+  // Run B: mirror swing — right arm forward/up, left arm back; left leg forward
+  const pjRunBRows = pjIdleRows.slice(0, 9).concat([
+    "...pppppppppppp...",
+    "...pp.pppppp.ppS..",
+    "...pp.pqqqqp.pp...",
+    "..SSp.pppppp.pp...",
+    "...pp.pppppp.pp...",
+    "......pppppp......",
+    "......pppppp......",
+    "......pp..pp......",
+    ".....pp...pp......",
+    "...ppp.....pp.....",
+    "...pp.......pp....",
+    "...pp.......ppp...",
+    "..ff.........fff..",
+  ]);
+  // Jump: both arms up, legs tucked
+  const pjJumpRows = pjIdleRows.slice(0, 9).concat([
+    "...pppppppppppp...",
+    "Spp...pppppp...ppS",
+    ".pp...pqqqqp...pp.",
+    "......pppppp......",
+    "......pppppp......",
+    "......pppppp......",
+    "......pppppp......",
+    "......pp..pp......",
+    ".....ppp..ppp.....",
+    "....pp......pp....",
+    ".....ff....ff.....",
+    "..................",
+    "..................",
+  ]);
+  const pjIdle = makeSprite(pjIdleRows, pjPal, S2);
+  const pjRunA = makeSprite(pjRunARows, pjPal, S2);
+  const pjRunB = makeSprite(pjRunBRows, pjPal, S2);
+  const pjJump = makeSprite(pjJumpRows, pjPal, S2);
+
+  // =====================================================================
+  //  HERO — wedding dress form (after pickup). Veil + gown + arms.
+  // =====================================================================
+  const bridePal = { H:'#5a3324', S:'#ffcb8e', E:'#2b2b3a', m:'#d1607f',
+                     W:'#ffffff', v:'#e6e6f2', L:'#f3e9ff', P:'#ff8fb0', g:'#4caf50', K:'#3a3a4a' };
+  const brideIdleRows = [
+    ".....LLLLLLLL.....",
+    "....LLHHHHHHLL....",
+    "...LLHHHHHHHHLL...",
+    "...LHHSSSSSSHHL...",
+    "...LHSSSSSSSSHL...",
+    "...LHSSEssEsSHL...",
+    "...LHSSSSSSSSHL...",
+    "....LSSmmSSL......",
+    "......SSSS........",
+    "...WWWWWWWWWWWW...",
+    "...WW.WWWWWW.WW...",
+    "...WW.WPPPPW.WW...",
+    "...WW.WPggPW.WW...",
+    "...SS.WWWWWW.SS...",
+    "....WWWWWWWWWW....",
+    "...WWWWWWWWWWWW...",
+    "..WWWWWWWWWWWWWW..",
+    "..WWvWWWWWWWWvWW..",
+    ".WWWWWWWWWWWWWWWW.",
+    ".WWWWWWWWWWWWWWWW.",
+    "WWWWWWWWWWWWWWWWWW",
+    "...KK......KK.....",
+  ];
+  // Dress run: gown sways + shoes stride (legs hidden under the gown)
+  const brideRunARows = brideIdleRows.slice(0, 18).concat([
+    "WWWWWWWWWWWWWWWW..",
+    "WWWWWWWWWWWWWWWW..",
+    "WWWWWWWWWWWWWWWW..",
+    "..KK......KK......",
+  ]);
+  const brideRunBRows = brideIdleRows.slice(0, 18).concat([
+    "..WWWWWWWWWWWWWWWW",
+    "..WWWWWWWWWWWWWWWW",
+    "..WWWWWWWWWWWWWWWW",
+    "......KK......KK..",
+  ]);
+  const brideJumpRows = brideIdleRows.slice(0, 21).concat(["....KKKK.........."]);
+  const brideIdle = makeSprite(brideIdleRows, bridePal, S2);
+  const brideRunA = makeSprite(brideRunARows, bridePal, S2);
+  const brideRunB = makeSprite(brideRunBRows, bridePal, S2);
+  const brideJump = makeSprite(brideJumpRows, bridePal, S2);
+
+  const pjSet    = { idle: pjIdle,    run: [pjRunA, pjRunB],       jump: pjJump };
+  const dressSet = { idle: brideIdle, run: [brideRunA, brideRunB], jump: brideJump };
+
+  // ----- Wedding dress pickup item -----
+  const dressItemPal = { W:'#ffffff', v:'#e6e6f2', H:'#c9a24a' };
+  const dressItem = makeSprite([
+    "....HH......",
+    "...H..H.....",
+    "..HHHHHH....",
+    "....WW......",
+    "...WWWW.....",
+    "...WvWW.....",
+    "..WWWWWW....",
+    "..WWWWWW....",
+    ".WWWWWWWW...",
+    ".WWWvWWWW...",
+    "WWWWWWWWWW..",
+    "WWWWWWWWWW..",
+    ".WWWWWWWW...",
+    "..WWWWWW....",
+  ], dressItemPal, S2);
+
+  // =====================================================================
+  //  GROOM — bigger, with arms and trousered legs (stands at the altar)
+  // =====================================================================
+  const groomPal = { H:'#2b2b3a', S:'#ffcb8e', E:'#1a1a2e', m:'#a04a5a',
+                     B:'#23232e', W:'#ffffff', T:'#c0392b', K:'#12121a' };
+  const groom = makeSprite([
+    "......HHHHHH......",
+    ".....HHHHHHHH.....",
+    ".....HHHHHHHH.....",
+    "....HHSSSSSSHH....",
+    "....HSSSSSSSSH....",
+    "....HSSEssEsSH....",
+    "....HSSSSSSSSH....",
+    ".....SSmmSS.......",
+    "......SSSS........",
+    "...BBBBBBBBBBBB...",
+    "...BB.BWTTWB.BB...",
+    "...BB.BWTTWB.BB...",
+    "...BB.BWTTWB.BB...",
+    "...SS.BBBBBB.SS...",
+    "......BBBBBB......",
+    "......BBBBBB......",
+    "......BB..BB......",
+    "......BB..BB......",
+    "......BB..BB......",
+    "......BB..BB......",
+    ".....BBB..BBB.....",
+    ".....KKK..KKK.....",
+  ], groomPal, S2);
+
+  // ----- Crab (enemy) -----
+  const crabPal = { R:'#e8552b', r:'#c33f16', E:'#12121a' };
+  const crab = makeSprite([
+    "...R....R...",
+    "...E....E...",
+    "..RRRRRRRR..",
+    "RRRRRRRRRRRR",
+    "RR.RRRRRR.RR",
+    "..RrRRRRrR..",
+    "..R.RRRR.R..",
+    ".R........R.",
+    "............",
+  ], crabPal, S2);
+
+  // ----- Hearts -----
+  const heartPal = { P:'#ff5f8f', w:'#ffd0dd' };
+  const heartFrames = [
+    makeSprite([".PP..PP.","PwPPPPPP","PwPPPPPP","PPPPPPPP",".PPPPPP.","..PPPP..","...PP...","........"], heartPal, S2),
+    makeSprite(["........",".PP.PP..","PPPPPPP.","PPPPPPP.",".PPPPP..","..PPP...","...P....","........"], heartPal, S2),
+  ];
+  const HEART = 16;
+
+  // ---------- Tiles ----------
+  const TILE = 16;
+  function drawGroundTile(x, y, top) {
+    const seed = Math.floor(x / TILE);
+    if (top) {
+      // sandy surface...
+      ctx.fillStyle = '#e8d29a'; ctx.fillRect(x, y, TILE, 6);
+      // ...with grass patches (alternating per tile -> a grass + sand mix)
+      ctx.fillStyle = '#7ec86a';
+      if (seed % 2 === 0) { ctx.fillRect(x, y, 8, 3); ctx.fillRect(x+2, y-1, 4, 2); }
+      else { ctx.fillRect(x+8, y, 8, 3); ctx.fillRect(x+11, y-1, 4, 2); }
+      ctx.fillStyle = '#69b257'; // grass blade tip
+      ctx.fillRect(x + (seed % 2 ? 12 : 3), y - 2, 1, 2);
+      // sandy body
+      ctx.fillStyle = '#cdaf74'; ctx.fillRect(x, y+6, TILE, TILE-6);
+    } else {
+      ctx.fillStyle = '#cdaf74'; ctx.fillRect(x, y, TILE, TILE);
+    }
+    ctx.fillStyle = '#b8975c'; // sand speckles
+    ctx.fillRect(x+3, y+9, 2, 2); ctx.fillRect(x+10, y+12, 2, 2);
+  }
+
+  // ---------- Levels ----------
+  const GROUND_Y = H - TILE * 2; // 148
+  const levels = [
+    { // Level 1 — beach
+      theme: 'beach', width: 3200,
+      platforms: [
+        {x:0,    y:GROUND_Y, w:640,  h:TILE*2},
+        {x:720,  y:GROUND_Y, w:760,  h:TILE*2},
+        {x:1560, y:GROUND_Y, w:900,  h:TILE*2},
+        {x:2540, y:GROUND_Y, w:660,  h:TILE*2},
+        {x:300,  y:GROUND_Y-52, w:64, h:12, float:true},
+        {x:520,  y:GROUND_Y-92, w:64, h:12, float:true},
+        {x:860,  y:GROUND_Y-60, w:80, h:12, float:true},
+        {x:1180, y:GROUND_Y-100,w:64, h:12, float:true},
+        {x:1360, y:GROUND_Y-56, w:64, h:12, float:true},
+        {x:1720, y:GROUND_Y-80, w:96, h:12, float:true},
+        {x:2000, y:GROUND_Y-108,w:64, h:12, float:true},
+        {x:2260, y:GROUND_Y-60, w:80, h:12, float:true},
+        {x:2700, y:GROUND_Y-84, w:96, h:12, float:true},
+      ],
+      coins: [
+        180,132, 700,132, 980,132, 1300,132, 1620,132, 2200,132, 2900,132,
+        316,GROUND_Y-72, 536,GROUND_Y-112, 876,GROUND_Y-80, 1196,GROUND_Y-120,
+        1376,GROUND_Y-76, 1736,GROUND_Y-100, 2016,GROUND_Y-128, 2276,GROUND_Y-80,
+        2716,GROUND_Y-104,
+      ],
+      enemies: [
+        {x:400, min:360, max:600,  type:'crab'},
+        {x:1000,min:960, max:1200, type:'ball'},
+        {x:1650,min:1600,max:1780, type:'crab'},
+        {x:2150,min:2080,max:2320, type:'ball'},
+        {x:2620,min:2560,max:2820, type:'crab'},
+      ],
+      dress: {x:1120, baseY:GROUND_Y-44},
+      goalX: 3110,
+    },
+    { // Level 2 — sunset luau
+      theme: 'sunset', width: 2600,
+      platforms: [
+        {x:0,    y:GROUND_Y, w:520, h:TILE*2},
+        {x:600,  y:GROUND_Y, w:700, h:TILE*2},
+        {x:1380, y:GROUND_Y, w:520, h:TILE*2},
+        {x:1980, y:GROUND_Y, w:620, h:TILE*2},
+        {x:260,  y:GROUND_Y-56, w:64, h:12, float:true},
+        {x:460,  y:GROUND_Y-96, w:64, h:12, float:true},
+        {x:720,  y:GROUND_Y-64, w:80, h:12, float:true},
+        {x:980,  y:GROUND_Y-104,w:64, h:12, float:true},
+        {x:1180, y:GROUND_Y-60, w:72, h:12, float:true},
+        {x:1480, y:GROUND_Y-88, w:96, h:12, float:true},
+        {x:1740, y:GROUND_Y-112,w:64, h:12, float:true},
+        {x:2020, y:GROUND_Y-64, w:80, h:12, float:true},
+        {x:2260, y:GROUND_Y-92, w:96, h:12, float:true},
+      ],
+      coins: [
+        160,132, 640,132, 900,132, 1200,132, 1500,132, 2100,132, 2380,132,
+        276,GROUND_Y-76, 476,GROUND_Y-116, 736,GROUND_Y-84, 996,GROUND_Y-124,
+        1196,GROUND_Y-80, 1496,GROUND_Y-108, 1756,GROUND_Y-132, 2036,GROUND_Y-84,
+        2276,GROUND_Y-112,
+      ],
+      enemies: [
+        {x:360, min:320, max:520,  type:'ball'},
+        {x:820, min:760, max:1000, type:'crab'},
+        {x:1250,min:1180,max:1360, type:'ball'},
+        {x:1620,min:1560,max:1820, type:'crab'},
+        {x:2120,min:2020,max:2320, type:'ball'},
+      ],
+      dress: null, // she already has the gown; luau reception
+      goalX: 2510,
+    },
+  ];
+  let level = levels[0], levelIndex = 0;
+
+  // ---------- State ----------
+  let player, camX, coins, enemies, dress, score, coinsGot, won, dead, time, flashMsg, flashUntil, confetti;
+  function startLevel(i, keep) {
+    levelIndex = i; level = levels[i];
+    player.x = 40; player.y = GROUND_Y - 40;
+    player.vx = 0; player.vy = 0; player.onGround = false; player.face = 1; player.anim = 0;
+    if (!keep) { player.hasDress = false; score = 0; }
+    camX = 0; coinsGot = 0; won = false; dead = false; confetti = [];
+    coins = [];
+    for (let k = 0; k < level.coins.length; k += 2)
+      coins.push({ x: level.coins[k], y: level.coins[k+1], got: false });
+    enemies = level.enemies.map(e => ({ x:e.x, y:GROUND_Y-16, min:e.min, max:e.max,
+                                        dir:1, alive:true, sq:0, type:e.type || 'crab', roll:0 }));
+    dress = level.dress ? { x: level.dress.x, y: level.dress.baseY, got: false } : { got: true };
+    document.getElementById('coinsTotal').textContent = coins.length;
+    document.getElementById('score').textContent = score;
+    document.getElementById('coins').textContent = coinsGot;
+  }
+  function reset() {
+    player = { x: 40, y: GROUND_Y - 40, w: 20, h: 40, vx: 0, vy: 0,
+               onGround: false, face: 1, anim: 0, hasDress: false };
+    time = 0; flashMsg = ''; flashUntil = 0; score = 0;
+    startLevel(0, false);
+    document.getElementById('msg').textContent = '';
+  }
+
+  // ---------- Audio: procedural SFX + looping music (Web Audio) ----------
+  let actx = null, master = null, musicGain = null, muted = false, musicTimer = null, step = 0;
+  function initAudio() {
+    if (actx) { if (actx.state === 'suspended') actx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    actx = new AC();
+    master = actx.createGain(); master.gain.value = muted ? 0 : 0.9; master.connect(actx.destination);
+    musicGain = actx.createGain(); musicGain.gain.value = 1; musicGain.connect(master);
+    startMusic();
+  }
+  function tone(freq, dur, type = 'square', vol = 0.2, dest = null, slideTo = null) {
+    if (!actx) return;
+    const o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    if (slideTo) o.frequency.linearRampToValueAtTime(slideTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(dest || master);
+    o.start(t); o.stop(t + dur + 0.03);
+  }
+  const arp = (freqs, gap, dur, type, vol) => freqs.forEach((f, i) => setTimeout(() => tone(f, dur, type, vol), i * gap));
+  const sfxJump  = () => tone(300, 0.16, 'square', 0.18, null, 640);
+  const sfxHeart = () => { tone(880, 0.08, 'triangle', 0.22); setTimeout(() => tone(1318, 0.12, 'triangle', 0.22), 70); };
+  const sfxStomp = () => tone(220, 0.14, 'square', 0.2, null, 70);
+  const sfxDress = () => arp([523, 659, 784, 1046], 70, 0.14, 'triangle', 0.24);
+  const sfxWin   = () => arp([523, 659, 784, 1046, 1318], 130, 0.26, 'triangle', 0.28);
+  const sfxDie   = () => tone(420, 0.5, 'sawtooth', 0.22, null, 110);
+  const sfxLevel = () => arp([659, 880, 1046, 1318], 90, 0.2, 'triangle', 0.26);
+
+  // Bridal-chorus-flavored 32-step loop (eighth notes). 0 = rest.
+  const MEL = [523,0,698,0,698,0,698,0, 659,0,587,0,523,0,0,0,
+               523,0,659,0,784,0,784,0, 698,0,659,0,698,0,0,0];
+  const BASS = {0:174.6, 8:130.8, 16:130.8, 24:174.6};
+  function startMusic() {
+    if (musicTimer) return;
+    const bpm = 96, stepMs = (60 / bpm) / 2 * 1000;
+    step = 0;
+    musicTimer = setInterval(() => {
+      if (!actx || muted) { step++; return; }
+      const f = MEL[step % MEL.length];
+      if (f) tone(f, 0.28, 'triangle', 0.14, musicGain);
+      const b = BASS[step % 32];
+      if (b) tone(b, 0.5, 'sine', 0.20, musicGain);
+      step++;
+    }, stepMs);
+  }
+  function toggleMute() { muted = !muted; if (master) master.gain.value = muted ? 0 : 0.9; }
+
+  // ---------- Input ----------
+  const keys = {};
+  addEventListener('keydown', e => {
+    initAudio();
+    keys[e.code] = true;
+    if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
+    if (e.code === 'KeyR') reset();
+    if (e.code === 'KeyM') toggleMute();
+  });
+  addEventListener('keyup', e => { keys[e.code] = false; });
+  addEventListener('pointerdown', initAudio);
+
+  // ---------- Touch (tap zones) ----------
+  // lower-left = move left, lower-right = move right, upper 45% = jump (multi-touch)
+  const touch = { left: false, right: false, jump: false };
+  const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+  function updateTouch(e) {
+    initAudio();
+    if ((won || dead) && e.touches.length) { reset(); touch.left = touch.right = touch.jump = false; return; }
+    let L = false, R = false, J = false;
+    const w = window.innerWidth, h = window.innerHeight;
+    for (const t of e.touches) {
+      if (t.clientY < h * 0.45) J = true;
+      else if (t.clientX < w * 0.5) L = true;
+      else R = true;
+    }
+    touch.left = L; touch.right = R; touch.jump = J;
+  }
+  for (const ev of ['touchstart', 'touchmove', 'touchend', 'touchcancel'])
+    addEventListener(ev, e => { e.preventDefault(); updateTouch(e); }, { passive: false });
+
+  const GRAV = 0.30, MOVE = 0.6, FRICTION = 0.82, MAXVX = 2.4, JUMP = 8.2, MAXFALL = 7;
+
+  function aabb(a, b) {
+    return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
+  }
+
+  function update() {
+    time++;
+    if (won || dead) return;
+
+    const left = keys.ArrowLeft || keys.KeyA || touch.left;
+    const right = keys.ArrowRight || keys.KeyD || touch.right;
+    const jump = keys.Space || keys.ArrowUp || keys.KeyW || touch.jump;
+
+    if (left)  { player.vx -= MOVE; player.face = -1; }
+    if (right) { player.vx += MOVE; player.face = 1; }
+    if (!left && !right) player.vx *= FRICTION;
+    player.vx = Math.max(-MAXVX, Math.min(MAXVX, player.vx));
+
+    if (jump && player.onGround) { player.vy = -JUMP; player.onGround = false; sfxJump(); }
+
+    player.vy += GRAV;
+    if (player.vy > MAXFALL) player.vy = MAXFALL;
+
+    player.x += player.vx;
+    for (const p of level.platforms) {
+      if (aabb(player, p)) {
+        if (player.vx > 0) player.x = p.x - player.w;
+        else if (player.vx < 0) player.x = p.x + p.w;
+        player.vx = 0;
+      }
+    }
+    if (player.x < 0) player.x = 0;
+
+    player.onGround = false;
+    player.y += player.vy;
+    for (const p of level.platforms) {
+      if (aabb(player, p)) {
+        if (player.vy > 0) { player.y = p.y - player.h; player.onGround = true; }
+        else if (player.vy < 0) { player.y = p.y + p.h; }
+        player.vy = 0;
+      }
+    }
+
+    if (player.y > H + 40) { if (!dead) { dead = true; sfxDie(); } }
+
+    camX = player.x - W / 3;
+    camX = Math.max(0, Math.min(level.width - W, camX));
+
+    if (!dress.got) {
+      const by = dress.y + Math.sin(time/20) * 3;
+      if (aabb(player, {x:dress.x, y:by, w:24, h:28})) {
+        dress.got = true; player.hasDress = true; score += 500;
+        flashMsg = '👰 GOT THE DRESS!'; flashUntil = time + 120; sfxDress();
+      }
+    }
+
+    for (const c of coins) {
+      if (c.got) continue;
+      if (aabb(player, {x:c.x, y:c.y, w:HEART, h:HEART})) {
+        c.got = true; coinsGot++; score += 100; sfxHeart();
+      }
+    }
+
+    for (const e of enemies) {
+      if (!e.alive) { e.sq++; continue; }
+      const sp = e.type === 'ball' ? 1.1 : 0.6;
+      e.x += e.dir * sp;
+      if (e.x < e.min) { e.x = e.min; e.dir = 1; }
+      if (e.x > e.max) { e.x = e.max; e.dir = -1; }
+      if (e.type === 'ball') e.roll += e.dir * 0.12;
+      const eb = {x:e.x, y:e.y, w:20, h:16};
+      if (aabb(player, eb)) {
+        if (player.vy > 0 && player.y + player.h - eb.y < 20) {
+          e.alive = false; score += 250; player.vy = -6; sfxStomp();
+        } else {
+          if (!dead) { dead = true; sfxDie(); }
+        }
+      }
+    }
+
+    if (player.x > level.goalX) {
+      if (levelIndex < levels.length - 1) {
+        score += 500;
+        startLevel(levelIndex + 1, true);
+        flashMsg = '🌺 SUNSET LUAU — LEVEL 2!'; flashUntil = time + 170; sfxLevel();
+        return;
+      }
+      won = true; score += 1000; sfxWin(); spawnConfetti();
+    }
+
+    player.anim += Math.abs(player.vx) * 0.12;
+
+    document.getElementById('score').textContent = score;
+    document.getElementById('coins').textContent = coinsGot;
+    const msg = document.getElementById('msg');
+    if (won)  msg.innerHTML = '<b style="color:#fff">💍 JUST MARRIED! Press R</b>';
+    else if (dead) msg.innerHTML = '<b style="color:#ff6b6b">OH NO! Press R</b>';
+    else if (time < flashUntil) msg.innerHTML = '<b style="color:#fff">' + flashMsg + '</b>';
+    else msg.textContent = '';
+  }
+
+  // ---------- Rendering ----------
+  const THEMES = {
+    beach: {
+      sky:['#4fc0f0','#bfeaff','#ffe9b0'], sun:'rgba(255,245,190,0.95)', sunGlow:'rgba(255,245,190,0.25)',
+      sunX:W-46, sunY:38, sunR:17, cloud:'rgba(255,255,255,0.92)',
+      ocean:['#2fb0dd','#1b8fc0'], glint:'rgba(255,250,210,0.5)', sand:'#e8d29a', foam:'rgba(255,255,255,0.85)',
+      trunk:'#a9743f', trunkShade:'#8a5c30', coconut:'#5a3a1e', frond:'#2fa14a', frond2:'#25823c',
+    },
+    sunset: {
+      sky:['#3a2b6b','#ff8a4d','#ffd36b'], sun:'rgba(255,150,70,0.97)', sunGlow:'rgba(255,120,60,0.32)',
+      sunX:W-70, sunY:96, sunR:27, cloud:'rgba(255,190,150,0.85)',
+      ocean:['#e0864a','#4a3a6e'], glint:'rgba(255,215,150,0.55)', sand:'#c99a5e', foam:'rgba(255,225,190,0.8)',
+      trunk:'#4a3a2f', trunkShade:'#3a2c24', coconut:'#2a1a12', frond:'#2f5a4a', frond2:'#243f38',
+    },
+  };
+  let TH = THEMES.beach;
+
+  function drawPalm(bx, baseY, s) {
+    ctx.fillStyle = TH.trunk;
+    const segs = 8; let tX = bx, tY = baseY;
+    for (let i = 0; i < segs; i++) {
+      tY = baseY - i * 4 * s; tX = bx + Math.sin(i * 0.45) * 3 * s;
+      ctx.fillRect(Math.round(tX), Math.round(tY), Math.max(2 * s, (4 - i * 0.2) * s), 4 * s);
+    }
+    ctx.fillStyle = TH.trunkShade; ctx.fillRect(Math.round(bx - s), Math.round(baseY - 2 * s), 2 * s, 4 * s);
+    ctx.fillStyle = TH.coconut;
+    ctx.fillRect(Math.round(tX - 2 * s), Math.round(tY + 2 * s), 2 * s, 2 * s);
+    ctx.fillRect(Math.round(tX + 3 * s), Math.round(tY + 2 * s), 2 * s, 2 * s);
+    const dirs = [[-1.2,-0.3],[-0.7,-0.8],[0.7,-0.8],[1.2,-0.3],[-1.35,0.25],[1.35,0.25]];
+    for (const [dx, dy] of dirs) {
+      ctx.fillStyle = TH.frond;
+      for (let t = 0; t < 7; t++) { const px = tX + dx*t*2*s, py = tY + dy*t*2*s + 0.18*t*t*s; ctx.fillRect(Math.round(px), Math.round(py), 2*s, 2*s); }
+      ctx.fillStyle = TH.frond2;
+      for (let t = 1; t < 7; t += 2) { const px = tX + dx*t*2*s, py = tY + dy*t*2*s + 0.18*t*t*s; ctx.fillRect(Math.round(px), Math.round(py) + s, 2*s, s); }
+    }
+  }
+
+  // spinning beach ball (procedural)
+  const BALL_COLORS = ['#ff4d4d','#ffd34d','#4db3ff','#7ee081','#ff8a3d','#ff5f8f'];
+  function drawBall(cx, cy, r, roll) {
+    for (let i = 0; i < 6; i++) {
+      ctx.fillStyle = BALL_COLORS[i];
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, roll + i * Math.PI / 3, roll + (i + 1) * Math.PI / 3);
+      ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(cx, cy, r * 0.28, 0, 7); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.stroke();
+  }
+
+  function drawBackground() {
+    TH = THEMES[level.theme] || THEMES.beach;
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, TH.sky[0]); grad.addColorStop(0.55, TH.sky[1]); grad.addColorStop(1, TH.sky[2]);
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
+
+    // sun
+    ctx.fillStyle = TH.sunGlow; ctx.beginPath(); ctx.arc(TH.sunX, TH.sunY, TH.sunR + 9, 0, 7); ctx.fill();
+    ctx.fillStyle = TH.sun;     ctx.beginPath(); ctx.arc(TH.sunX, TH.sunY, TH.sunR, 0, 7); ctx.fill();
+
+    // clouds
+    ctx.fillStyle = TH.cloud;
+    const coff = (camX * 0.15) % 260;
+    for (let i = -1; i < W / 260 + 2; i++) {
+      const cx = i * 260 - coff + 30, cy = 24 + (i % 2) * 20;
+      ctx.beginPath(); ctx.arc(cx, cy, 9, 0, 7); ctx.arc(cx + 11, cy + 3, 12, 0, 7); ctx.arc(cx + 24, cy, 8, 0, 7); ctx.fill();
+    }
+
+    // ocean band + shore
+    const horizon = 96, shoreTop = 124;
+    const og = ctx.createLinearGradient(0, horizon, 0, H);
+    og.addColorStop(0, TH.ocean[0]); og.addColorStop(1, TH.ocean[1]);
+    ctx.fillStyle = og; ctx.fillRect(0, horizon, W, H - horizon);
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1;
+    for (let layer = 0; layer < 4; layer++) {
+      ctx.beginPath();
+      const yBase = horizon + 4 + layer * 5, phase = time * 0.05 + layer * 1.3 + camX * 0.003;
+      for (let x = 0; x <= W; x += 2) { const y = yBase + Math.sin(x * 0.06 + phase) * 1.7; if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+      ctx.stroke();
+    }
+    ctx.fillStyle = TH.glint;
+    for (let k = 0; k < 4; k++) ctx.fillRect(TH.sunX - 6 + Math.sin(time * 0.06 + k) * 4, horizon + 4 + k * 4, 8, 1);
+
+    // sandy shore in front of the sea
+    ctx.fillStyle = TH.sand;
+    ctx.beginPath(); ctx.moveTo(0, shoreTop);
+    for (let x = 0; x <= W; x += 4) ctx.lineTo(x, shoreTop + Math.sin(x * 0.08 + time * 0.04) * 2);
+    ctx.lineTo(W, GROUND_Y); ctx.lineTo(0, GROUND_Y); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = TH.foam; ctx.beginPath();
+    for (let x = 0; x <= W; x += 4) { const y = shoreTop + Math.sin(x * 0.08 + time * 0.04) * 2; if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+    ctx.stroke();
+
+    // palms
+    const palmOff2 = (camX * 0.22) % 420;
+    for (let i = -1; i < W / 420 + 2; i++) drawPalm(i * 420 - palmOff2 + 220, GROUND_Y - 4, 1.3);
+    const palmOff = (camX * 0.4) % 300;
+    for (let i = -1; i < W / 300 + 2; i++) drawPalm(i * 300 - palmOff + 70, GROUND_Y - 2, 2.1);
+  }
+
+  function drawHut(gx) {
+    const baseY = GROUND_Y, wallTop = GROUND_Y - 46;
+    // support posts
+    ctx.fillStyle = '#9c6b3f';
+    ctx.fillRect(gx + 6, wallTop, 5, baseY - wallTop);
+    ctx.fillRect(gx + 61, wallTop, 5, baseY - wallTop);
+    // back wall
+    ctx.fillStyle = '#caa25e';
+    ctx.fillRect(gx + 11, wallTop, 50, baseY - wallTop);
+    // plank lines
+    ctx.fillStyle = '#b98a4a';
+    for (let wy = wallTop + 6; wy < baseY; wy += 8) ctx.fillRect(gx + 11, wy, 50, 2);
+    // doorway
+    ctx.fillStyle = '#4a2f18';
+    ctx.fillRect(gx + 28, baseY - 30, 16, 30);
+    // thatched roof (overhanging triangle)
+    ctx.fillStyle = '#d3ac54';
+    ctx.beginPath();
+    ctx.moveTo(gx - 8, wallTop + 2);
+    ctx.lineTo(gx + 36, wallTop - 24);
+    ctx.lineTo(gx + 80, wallTop + 2);
+    ctx.closePath(); ctx.fill();
+    // straw layers
+    ctx.strokeStyle = '#a5822f'; ctx.lineWidth = 1;
+    for (let r = 0; r < 4; r++) {
+      const yy = wallTop - 2 - r * 5;
+      ctx.beginPath(); ctx.moveTo(gx - 6 + r * 5, yy); ctx.lineTo(gx + 78 - r * 5, yy); ctx.stroke();
+    }
+    // ridge + heart sign
+    ctx.fillStyle = '#8a5c30'; ctx.fillRect(gx + 34, wallTop - 26, 4, 6);
+    ctx.fillStyle = '#ff5f8f';
+    ctx.fillRect(gx + 33, wallTop - 34, 6, 5);
+    ctx.fillRect(gx + 31, wallTop - 33, 2, 2); ctx.fillRect(gx + 39, wallTop - 33, 2, 2);
+  }
+
+  // ----- Confetti (bursts on win) -----
+  const CONF_COLORS = ['#ff5f8f','#ffd34d','#4db3ff','#7ee081','#ffffff','#ff8a3d'];
+  function spawnConfetti() {
+    confetti = [];
+    for (let i = 0; i < 140; i++) confetti.push({
+      x: Math.random() * W, y: Math.random() * -H,
+      vx: (Math.random() - 0.5) * 1.2, vy: 1 + Math.random() * 2.2,
+      s: 2 + Math.random() * 3, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.4,
+      c: CONF_COLORS[(Math.random() * CONF_COLORS.length) | 0],
+    });
+  }
+
+  function draw() {
+    drawBackground();
+    ctx.save();
+    ctx.translate(-Math.round(camX), 0);
+
+    for (const p of level.platforms) {
+      if (p.x + p.w < camX || p.x > camX + W) continue;
+      if (p.float) {
+        ctx.fillStyle = '#f6e3c5'; ctx.fillRect(p.x, p.y, p.w, p.h);
+        ctx.fillStyle = '#ffc2e0'; ctx.fillRect(p.x, p.y, p.w, 4);
+        ctx.fillStyle = '#ff8fb0';
+        for (let d = 2; d < p.w; d += 8) ctx.fillRect(p.x+d, p.y+2, 2, 2);
+      } else {
+        for (let tx = 0; tx < p.w; tx += TILE)
+          for (let ty = 0; ty < p.h; ty += TILE)
+            drawGroundTile(p.x+tx, p.y+ty, ty === 0);
+      }
+    }
+
+    if (!dress.got) {
+      const by = dress.y + Math.sin(time/20) * 3;
+      ctx.fillStyle = 'rgba(255,255,210,0.45)';
+      ctx.beginPath(); ctx.arc(dress.x+12, by+14, 20 + Math.sin(time/10)*2, 0, 7); ctx.fill();
+      ctx.drawImage(dressItem, dress.x, by);
+    }
+
+    for (const c of coins) {
+      if (c.got) continue;
+      const f = Math.floor(time/12) % 2;
+      ctx.drawImage(heartFrames[f], c.x, c.y + (f ? 1 : 0));
+    }
+
+    drawHut(level.goalX);
+    ctx.drawImage(groom, level.goalX + 16, GROUND_Y - 44);
+
+    for (const e of enemies) {
+      if (e.alive) {
+        if (e.type === 'ball') drawBall(e.x + 10, GROUND_Y - 10, 10, e.roll);
+        else ctx.drawImage(crab, e.x-2, e.y-2);
+      } else if (e.sq < 20) {
+        if (e.type === 'ball') { ctx.globalAlpha = 0.7; drawBall(e.x + 10, GROUND_Y - 5, 6, e.roll); ctx.globalAlpha = 1; }
+        else ctx.drawImage(crab, e.x-2, e.y+8, 24, 8);
+      }
+    }
+
+    // hero — bigger sprite (36x44). Hitbox 20x40, so center: dx=x-8, feet: dy=y-4
+    const set = player.hasDress ? dressSet : pjSet;
+    let spr = set.idle, bob = 0;
+    if (!player.onGround) {
+      spr = set.jump;
+    } else if (Math.abs(player.vx) > 0.4) {
+      const fi = Math.floor(player.anim) % set.run.length;
+      spr = set.run[fi];
+      bob = fi === 0 ? -1 : 0;
+    }
+    const dx = player.x - 8, dy = player.y - 4 + bob;
+    ctx.save();
+    if (player.face < 0) { ctx.translate(dx + spr.width, dy); ctx.scale(-1,1); ctx.drawImage(spr, 0, 0); }
+    else ctx.drawImage(spr, dx, dy);
+    ctx.restore();
+
+    ctx.restore(); // end world translate
+
+    // confetti (screen space, celebrates the win)
+    if (confetti.length) {
+      for (const p of confetti) {
+        p.x += p.vx; p.y += p.vy; p.vy += 0.02; p.rot += p.vr;
+        if (p.y > H + 6 && won) { p.y = -6; p.x = Math.random() * W; p.vy = 1 + Math.random() * 2.2; }
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.fillStyle = p.c; ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s);
+        ctx.restore();
+      }
+    }
+
+    // tap-zone hints (touch devices only)
+    if (isTouch && !won) {
+      ctx.save();
+      ctx.globalAlpha = 0.22; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, H * 0.45); ctx.lineTo(W, H * 0.45); ctx.stroke();   // jump band
+      ctx.beginPath(); ctx.moveTo(W / 2, H * 0.45); ctx.lineTo(W / 2, H); ctx.stroke();  // L/R divider
+      ctx.globalAlpha = 0.5; ctx.fillStyle = '#fff';
+      ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('TAP = JUMP', W / 2, 11);
+      ctx.fillText('\u25C4', W * 0.25, H - 6);
+      ctx.fillText('\u25BA', W * 0.75, H - 6);
+      ctx.restore();
+    }
+  }
+
+  function loop() { update(); draw(); requestAnimationFrame(loop); }
+  reset();
+  loop();
+})();
+</script>
+</body>
+</html>
