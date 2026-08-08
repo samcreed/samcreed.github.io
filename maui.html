@@ -28,12 +28,39 @@
   #hud { margin-top: 10px; font-size: 16px; letter-spacing: 1px; }
   #hud b { color: #ff8fb0; }
   .keys { margin-top: 4px; font-size: 13px; opacity: .7; }
+
+  #intro { position: fixed; inset: 0; background: #000; z-index: 50; overflow: hidden; }
+  #intro.hidden { display: none; }
+  #intro .pre { position: absolute; top: 24%; left: 0; right: 0; text-align: center;
+    color: #4bd5ee; font-family: monospace; font-size: 18px; line-height: 1.5; }
+  #intro .crawl-wrap { position: absolute; inset: 0; perspective: 320px; overflow: hidden; }
+  #intro .crawl { position: absolute; top: 100%; left: 50%; width: 82%; max-width: 600px;
+    transform: translateX(-50%) rotateX(26deg); transform-origin: 50% 100%;
+    color: #feda4a; font-family: 'Times New Roman', Georgia, serif; font-size: 22px;
+    line-height: 1.6; text-align: justify; animation: crawl 48s linear infinite; }
+  #intro .crawl-title { text-align: center; font-weight: bold; letter-spacing: 2px; margin-bottom: 24px; }
+  #intro .crawl-title span { font-size: 30px; }
+  @keyframes crawl { 0% { top: 100%; } 100% { top: -280%; } }
+  #intro .start { position: absolute; bottom: 18px; left: 0; right: 0; text-align: center;
+    color: #fff; font-family: monospace; font-size: 13px; animation: blink 1.2s steps(1, end) infinite; }
+  @keyframes blink { 50% { opacity: .15; } }
 </style>
 </head>
 <body>
+<div id="intro">
+  <div class="pre">A long time ago, in a chapel<br>far, far away....</div>
+  <div class="crawl-wrap"><div class="crawl">
+    <div class="crawl-title">EPISODE IV<br><span>THE LATE BRIDE</span></div>
+    <p>It is the morning of the big day. KIM has overslept.</p>
+    <p>With the ceremony only minutes away, she must race across the islands of MAUI &mdash; bounding over cake platforms and dodging snapping crabs and rogue beach balls.</p>
+    <p>Her beloved waits at the sunset luau. Should the clock run out before she reaches the altar, all is lost.</p>
+    <p>The countdown has begun....</p>
+  </div></div>
+  <div class="start">PRESS ANY KEY / TAP TO START</div>
+</div>
 <div id="wrap">
-  <canvas id="game" width="320" height="180"></canvas>
-  <div id="hud">SCORE <b id="score">0</b> &nbsp; HEARTS <b id="coins">0</b>/<b id="coinsTotal">0</b> &nbsp; <span id="msg"></span></div>
+  <canvas id="game" width="640" height="360"></canvas>
+  <div id="hud">TIME <b id="time">60</b> &nbsp; SCORE <b id="score">0</b> &nbsp; HEARTS <b id="coins">0</b>/<b id="coinsTotal">0</b> &nbsp; <span id="msg"></span></div>
   <div class="keys">← → / A D move &nbsp;·&nbsp; SPACE / W / ↑ jump &nbsp;·&nbsp; R restart &nbsp;·&nbsp; M mute<br>mobile: tap left/right side to move, top of screen to jump</div>
 </div>
 <script>
@@ -45,153 +72,156 @@
 
   // ---------- Pixel-art sprite factory ----------
   function makeSprite(rows, palette, scale = 1) {
-    const h = rows.length, w = rows[0].length;
+    const h = rows.length;
+    let w = 0; for (const r of rows) if (r.length > w) w = r.length;
     const c = document.createElement('canvas');
     c.width = w * scale; c.height = h * scale;
     const g = c.getContext('2d');
     for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const ch = rows[y][x];
+      const row = rows[y];
+      for (let x = 0; x < row.length; x++) {
+        const ch = row[x];
         if (ch === '.' || ch === ' ') continue;
-        g.fillStyle = palette[ch] || '#f0f';
+        const col = palette[ch]; if (!col) continue;
+        g.fillStyle = col;
         g.fillRect(x * scale, y * scale, scale, scale);
       }
     }
     return c;
   }
-  const S2 = 2; // sprites drawn at 2x. All character grids are 18 wide x 22 tall.
+  const S2 = 4; // sprites drawn at 4x (2x res). Character grids are 22 wide x ~24 tall.
 
   // =====================================================================
-  //  HERO — pink pajamas (starting form). Head + torso + 2 arms + 2 legs.
+  //  HERO — progressive dress-up. Kim starts in pink pajamas with LONG
+  //  hair and BARE feet. Items rebuild her look:
+  //    lipstick -> makeup (bigger eyes, blush, red lips)
+  //    shoes    -> 'F' foot cells turn white  (barefoot = skin)
+  //    dress    -> switch to the gown body
   // =====================================================================
-  const pjPal = { H:'#5a3324', S:'#ffcb8e', E:'#2b2b3a', m:'#d1607f', p:'#ff9ec2', q:'#e87aa6', f:'#ffd7e6' };
-  const pjIdleRows = [
-    "......HHHHHH......",
-    ".....HHHHHHHH.....",
-    "....HHHHHHHHHH....",
-    "....HHSSSSSSHH....",
-    "....HSSSSSSSSH....",
-    "....HSSEssEsSH....",
-    "....HSSSSSSSSH....",
-    ".....SSmmSS.......",
-    "......SSSS........",
-    "...pppppppppppp...",
-    "...pp.pppppp.pp...",
-    "...pp.pqqqqp.pp...",
-    "...pp.pppppp.pp...",
-    "...SS.pppppp.SS...",
-    "......pppppp......",
-    "......pppppp......",
-    "......pp..pp......",
-    "......pp..pp......",
-    "......pp..pp......",
-    "......pp..pp......",
-    ".....ppp..ppp.....",
-    ".....fff..fff.....",
+  const kimPal = { o:'#6a4a34', H:'#7a5236', S:'#f0c690', E:'#241d10', m:'#cc2b3a', b:'#ff9db0', t:'#e05a8a',
+                   p:'#ff9ec2', q:'#e87aa6', W:'#ffffff', v:'#dfe0ea', L:'#eef0f5', P:'#ff8fb0', g:'#4caf50' };
+  const kimPalFor = (shoes) => Object.assign({}, kimPal, { F: shoes ? '#ffffff' : kimPal.S });
+
+  const pjFace = (makeup) => makeup ? [
+    "......HSSSSSSSSH......",
+    "......HSSESSESSH......",
+    "......HSbSSSSbSH......",
+    ".......SSmmSS.........",
+  ] : [
+    "......HSSSSSSSSH......",
+    "......HSSEESSEEH......",
+    "......HSSSSSSSSH......",
+    ".......SSSSSS.........",
   ];
-  // Run A: left arm forward/up, right arm back; right leg forward, left leg trailing
-  const pjRunARows = pjIdleRows.slice(0, 9).concat([
-    "...pppppppppppp...",
-    "..Spp.pppppp.pp...",
-    "...pp.pqqqqp.pp...",
-    "...pp.pppppp.pSS..",
-    "...pp.pppppp.pp...",
-    "......pppppp......",
-    "......pppppp......",
-    "......pp..pp......",
-    "......pp...pp.....",
-    ".....pp.....ppp...",
-    "....pp.......pp...",
-    "...ppp.......pp...",
-    "..fff.........ff..",
-  ]);
-  // Run B: mirror swing — right arm forward/up, left arm back; left leg forward
-  const pjRunBRows = pjIdleRows.slice(0, 9).concat([
-    "...pppppppppppp...",
-    "...pp.pppppp.ppS..",
-    "...pp.pqqqqp.pp...",
-    "..SSp.pppppp.pp...",
-    "...pp.pppppp.pp...",
-    "......pppppp......",
-    "......pppppp......",
-    "......pp..pp......",
-    ".....pp...pp......",
-    "...ppp.....pp.....",
-    "...pp.......pp....",
-    "...pp.......ppp...",
-    "..ff.........fff..",
-  ]);
-  // Jump: both arms up, legs tucked
-  const pjJumpRows = pjIdleRows.slice(0, 9).concat([
-    "...pppppppppppp...",
-    "Spp...pppppp...ppS",
-    ".pp...pqqqqp...pp.",
-    "......pppppp......",
-    "......pppppp......",
-    "......pppppp......",
-    "......pppppp......",
-    "......pp..pp......",
-    ".....ppp..ppp.....",
-    "....pp......pp....",
-    ".....ff....ff.....",
-    "..................",
-    "..................",
-  ]);
-  const pjIdle = makeSprite(pjIdleRows, pjPal, S2);
-  const pjRunA = makeSprite(pjRunARows, pjPal, S2);
-  const pjRunB = makeSprite(pjRunBRows, pjPal, S2);
-  const pjJump = makeSprite(pjJumpRows, pjPal, S2);
-
-  // =====================================================================
-  //  HERO — wedding dress form (after pickup). Veil + gown + arms.
-  // =====================================================================
-  const bridePal = { H:'#5a3324', S:'#ffcb8e', E:'#2b2b3a', m:'#d1607f',
-                     W:'#ffffff', v:'#e6e6f2', L:'#f3e9ff', P:'#ff8fb0', g:'#4caf50', K:'#3a3a4a' };
-  const brideIdleRows = [
-    ".....LLLLLLLL.....",
-    "....LLHHHHHHLL....",
-    "...LLHHHHHHHHLL...",
-    "...LHHSSSSSSHHL...",
-    "...LHSSSSSSSSHL...",
-    "...LHSSEssEsSHL...",
-    "...LHSSSSSSSSHL...",
-    "....LSSmmSSL......",
-    "......SSSS........",
-    "...WWWWWWWWWWWW...",
-    "...WW.WWWWWW.WW...",
-    "...WW.WPPPPW.WW...",
-    "...WW.WPggPW.WW...",
-    "...SS.WWWWWW.SS...",
-    "....WWWWWWWWWW....",
-    "...WWWWWWWWWWWW...",
-    "..WWWWWWWWWWWWWW..",
-    "..WWvWWWWWWWWvWW..",
-    ".WWWWWWWWWWWWWWWW.",
-    ".WWWWWWWWWWWWWWWW.",
-    "WWWWWWWWWWWWWWWWWW",
-    "...KK......KK.....",
+  const pjHead = [
+    ".........HHH.........",
+    ".........HHH.........",
+    ".........ttt.........",
+    "........oHHHHo........",
+    ".......oHHHHHHo.......",
+    "......oHHHHHHHHo......",
+    ".....oHHHHHHHHHHo.....",
   ];
-  // Dress run: gown sways + shoes stride (legs hidden under the gown)
-  const brideRunARows = brideIdleRows.slice(0, 18).concat([
-    "WWWWWWWWWWWWWWWW..",
-    "WWWWWWWWWWWWWWWW..",
-    "WWWWWWWWWWWWWWWW..",
-    "..KK......KK......",
-  ]);
-  const brideRunBRows = brideIdleRows.slice(0, 18).concat([
-    "..WWWWWWWWWWWWWWWW",
-    "..WWWWWWWWWWWWWWWW",
-    "..WWWWWWWWWWWWWWWW",
-    "......KK......KK..",
-  ]);
-  const brideJumpRows = brideIdleRows.slice(0, 21).concat(["....KKKK.........."]);
-  const brideIdle = makeSprite(brideIdleRows, bridePal, S2);
-  const brideRunA = makeSprite(brideRunARows, bridePal, S2);
-  const brideRunB = makeSprite(brideRunBRows, bridePal, S2);
-  const brideJump = makeSprite(brideJumpRows, bridePal, S2);
+  const pjTorso = [
+    ".......SSSSSS.........",
+    "....pppppppppppp......",
+    "....pp.pppppp.pp......",
+    "....pp.pqqqqp.pp......",
+    "....SS.pppppp.SS......",
+    "......pppppp..........",
+  ];
+  const pjLegs = {
+    idle: [
+      "......pp....pp.......",
+      "......pp....pp.......",
+      "......pp....pp.......",
+      "......pp....pp.......",
+      "......FF....FF.......",
+      ".....FFF....FFF......",
+    ],
+    a: [
+      "......pp....pp.......",
+      ".....pp......pp......",
+      "....pp........pp.....",
+      "...pp.........pp.....",
+      "..FFF.........FF.....",
+      "......................",
+    ],
+    b: [
+      "......pp....pp.......",
+      "......pp....pp.......",
+      ".....pppppp..........",
+      "......FFFFFF.........",
+      "......FF..FF.........",
+      "......................",
+    ],
+  };
+  const pjRowsFor = (makeup, legs) => pjHead.concat(pjFace(makeup), pjTorso, legs);
+  function buildPjSet(makeup, shoes) {
+    const pal = kimPalFor(shoes);
+    return {
+      idle: makeSprite(pjRowsFor(makeup, pjLegs.idle), pal, S2),
+      run: [ makeSprite(pjRowsFor(makeup, pjLegs.a), pal, S2),
+             makeSprite(pjRowsFor(makeup, pjLegs.b), pal, S2) ],
+      jump: makeSprite(pjRowsFor(makeup, pjLegs.idle), pal, S2),
+    };
+  }
 
-  const pjSet    = { idle: pjIdle,    run: [pjRunA, pjRunB],       jump: pjJump };
-  const dressSet = { idle: brideIdle, run: [brideRunA, brideRunB], jump: brideJump };
+  const brideFace = (makeup) => makeup ? [
+    "....LLHSSSSSSSSHLL....",
+    "....LLHSSESSESSHLL....",
+    "....LLHSbSSSSbSHLL....",
+    "....LLHSSSmmSSSHLL....",
+  ] : [
+    "....LLHSSSSSSSSHLL....",
+    "....LLHSSEESSEEHLL....",
+    "....LLHSSSSSSSSHLL....",
+    "....LLHSSSSSSSSHLL....",
+  ];
+  const brideHead = [
+    "......LLLLLLLLLL......",
+    ".....LLLLLLLLLLLL.....",
+    "....LLLHHHHHHHHLLL....",
+    "....LLHHHHHHHHHHLL....",
+  ];
+  const brideBody = [
+    ".......SSSSSS.........",
+    "....WWWWWWWWWWWW......",
+    "....WW.WWWWWW.WW......",
+    "....WW.WPPPPW.WW......",
+    "....WW.WPggPW.WW......",
+    "....SS.WWWWWW.SS......",
+    ".....WWWWWWWWWW.......",
+    "....WWWWWWWWWWWW......",
+    "...WWWWWWWWWWWWWW.....",
+    "...WWWWvWWWWWWWWW.....",
+    "..WWWWWWWWWWWWWWWW....",
+    "..WWWWWvWWWWWWWWWW....",
+    ".WWWWWWWWWWWWWWWWWW...",
+    ".WWWWWWWWWWWWWWWWWW...",
+    "WWWWWWWWWWWWWWWWWWWW..",
+  ];
+  const brideShoe = { idle: "...FFF......FFF.......", a: "..FFF......FFF........", b: "....FFF......FFF......" };
+  function buildBrideSet(makeup, shoes) {
+    const pal = kimPalFor(shoes);
+    const base = brideHead.concat(brideFace(makeup), brideBody);
+    const trunk = base.slice(0, base.length - 3); // drop the 3 hem rows for run variants
+    const hemA = ["WWWWWWWWWWWWWWWWWW....", "WWWWWWWWWWWWWWWWWW....", "WWWWWWWWWWWWWWWWWWWW.."];
+    const hemB = ["...WWWWWWWWWWWWWWWWWW.", "...WWWWWWWWWWWWWWWWWW.", "..WWWWWWWWWWWWWWWWWWWW"];
+    return {
+      idle: makeSprite(base.concat([brideShoe.idle]), pal, S2),
+      run: [ makeSprite(trunk.concat(hemA, [brideShoe.a]), pal, S2),
+             makeSprite(trunk.concat(hemB, [brideShoe.b]), pal, S2) ],
+      jump: makeSprite(base.concat([brideShoe.idle]), pal, S2),
+    };
+  }
+
+  let pjSet = buildPjSet(false, false);
+  let dressSet = buildBrideSet(false, false);
+  function rebuildKim() {
+    pjSet = buildPjSet(player.hasLipstick, player.hasShoes);
+    dressSet = buildBrideSet(player.hasLipstick, player.hasShoes);
+  }
 
   // ----- Wedding dress pickup item -----
   const dressItemPal = { W:'#ffffff', v:'#e6e6f2', H:'#c9a24a' };
@@ -212,34 +242,61 @@
     "..WWWWWW....",
   ], dressItemPal, S2);
 
+  const lipstickItem = makeSprite([
+    "...RR...",
+    "..RRRR..",
+    "..RRRR..",
+    "..dRRd..",
+    "..GGGG..",
+    "..GGGG..",
+    "..GGGG..",
+    "..GGGG..",
+    "..GGGG..",
+    "..dddd..",
+    "........",
+    "........",
+  ], { R:'#cc2b3a', d:'#7a1a22', G:'#d9b45a' }, S2);
+
+  const shoesItem = makeSprite([
+    "............",
+    "..WW....WW..",
+    ".oWWo..oWWo.",
+    ".WWWW..WWWW.",
+    ".ssss..ssss.",
+    "............",
+    "............",
+    "............",
+  ], { W:'#ffffff', o:'#c9cdd8', s:'#9a9aa2' }, S2);
+
   // =====================================================================
   //  GROOM — bigger, with arms and trousered legs (stands at the altar)
   // =====================================================================
-  const groomPal = { H:'#2b2b3a', S:'#ffcb8e', E:'#1a1a2e', m:'#a04a5a',
-                     B:'#23232e', W:'#ffffff', T:'#c0392b', K:'#12121a' };
+  const groomPal = { D:'#4d4a38', H:'#5a3a22', S:'#f0c690', E:'#241d10', m:'#9a5a4a', W:'#eeead8' };
   const groom = makeSprite([
-    "......HHHHHH......",
-    ".....HHHHHHHH.....",
-    ".....HHHHHHHH.....",
-    "....HHSSSSSSHH....",
-    "....HSSSSSSSSH....",
-    "....HSSEssEsSH....",
-    "....HSSSSSSSSH....",
-    ".....SSmmSS.......",
-    "......SSSS........",
-    "...BBBBBBBBBBBB...",
-    "...BB.BWTTWB.BB...",
-    "...BB.BWTTWB.BB...",
-    "...BB.BWTTWB.BB...",
-    "...SS.BBBBBB.SS...",
-    "......BBBBBB......",
-    "......BBBBBB......",
-    "......BB..BB......",
-    "......BB..BB......",
-    "......BB..BB......",
-    "......BB..BB......",
-    ".....BBB..BBB.....",
-    ".....KKK..KKK.....",
+    ".......HHHHHHHH.......",
+    ".....HHHHHHHHHHHH.....",
+    ".....HHHHHHHHHHHH.....",
+    ".....HHSSSSSSSSHH.....",
+    ".....HHSSSSSSSSHH.....",
+    ".....HHSSEESSEEHH.....",
+    ".....HHSSSSSSSSHH.....",
+    "......HSSSSSSSSH......",
+    "........SSmmSS........",
+    "........DDDDDD........",
+    ".......DDDWWDDD.......",
+    "......DDDDWWDDDD......",
+    "......DDDDWWDDDD......",
+    "......DDDDDDDDDD......",
+    "......DDDSSSSDDD......",
+    "......DDDDDDDDDD......",
+    "......DDDDDDDDDD......",
+    ".......DDD.DDD........",
+    ".......DDD.DDD........",
+    ".......DDD.DDD........",
+    ".......DDD.DDD........",
+    ".......DDD.DDD........",
+    "......DDDD.DDDD.......",
+    "......DDDD.DDDD.......",
   ], groomPal, S2);
 
   // ----- Crab (enemy) -----
@@ -262,88 +319,93 @@
     makeSprite([".PP..PP.","PwPPPPPP","PwPPPPPP","PPPPPPPP",".PPPPPP.","..PPPP..","...PP...","........"], heartPal, S2),
     makeSprite(["........",".PP.PP..","PPPPPPP.","PPPPPPP.",".PPPPP..","..PPP...","...P....","........"], heartPal, S2),
   ];
-  const HEART = 16;
+  const HEART = 32;
 
   // ---------- Tiles ----------
-  const TILE = 16;
+  const TILE = 32;
   function drawGroundTile(x, y, top) {
     const seed = Math.floor(x / TILE);
     if (top) {
       // sandy surface...
-      ctx.fillStyle = '#e8d29a'; ctx.fillRect(x, y, TILE, 6);
+      ctx.fillStyle = '#e8d29a'; ctx.fillRect(x, y, TILE, 12);
       // ...with grass patches (alternating per tile -> a grass + sand mix)
       ctx.fillStyle = '#7ec86a';
-      if (seed % 2 === 0) { ctx.fillRect(x, y, 8, 3); ctx.fillRect(x+2, y-1, 4, 2); }
-      else { ctx.fillRect(x+8, y, 8, 3); ctx.fillRect(x+11, y-1, 4, 2); }
+      if (seed % 2 === 0) { ctx.fillRect(x, y, 16, 6); ctx.fillRect(x+4, y-2, 8, 4); }
+      else { ctx.fillRect(x+16, y, 16, 6); ctx.fillRect(x+22, y-2, 8, 4); }
       ctx.fillStyle = '#69b257'; // grass blade tip
-      ctx.fillRect(x + (seed % 2 ? 12 : 3), y - 2, 1, 2);
+      ctx.fillRect(x + (seed % 2 ? 24 : 6), y - 4, 2, 4);
       // sandy body
-      ctx.fillStyle = '#cdaf74'; ctx.fillRect(x, y+6, TILE, TILE-6);
+      ctx.fillStyle = '#cdaf74'; ctx.fillRect(x, y+12, TILE, TILE-12);
     } else {
       ctx.fillStyle = '#cdaf74'; ctx.fillRect(x, y, TILE, TILE);
     }
     ctx.fillStyle = '#b8975c'; // sand speckles
-    ctx.fillRect(x+3, y+9, 2, 2); ctx.fillRect(x+10, y+12, 2, 2);
+    ctx.fillRect(x+6, y+18, 4, 4); ctx.fillRect(x+20, y+24, 4, 4);
   }
 
-  // ---------- Levels ----------
-  const GROUND_Y = H - TILE * 2; // 148
+  // ---------- Levels (authored in design space, scaled x2 at load) ----------
+  const GROUND_Y = H - TILE * 2; // world ground line (296 at 2x res)
+  const GY = 148;                // design-space ground the level data is authored against
   const levels = [
     { // Level 1 — beach
       theme: 'beach', width: 3200,
       platforms: [
-        {x:0,    y:GROUND_Y, w:640,  h:TILE*2},
-        {x:720,  y:GROUND_Y, w:760,  h:TILE*2},
-        {x:1560, y:GROUND_Y, w:900,  h:TILE*2},
-        {x:2540, y:GROUND_Y, w:660,  h:TILE*2},
-        {x:300,  y:GROUND_Y-52, w:64, h:12, float:true},
-        {x:520,  y:GROUND_Y-92, w:64, h:12, float:true},
-        {x:860,  y:GROUND_Y-60, w:80, h:12, float:true},
-        {x:1180, y:GROUND_Y-100,w:64, h:12, float:true},
-        {x:1360, y:GROUND_Y-56, w:64, h:12, float:true},
-        {x:1720, y:GROUND_Y-80, w:96, h:12, float:true},
-        {x:2000, y:GROUND_Y-108,w:64, h:12, float:true},
-        {x:2260, y:GROUND_Y-60, w:80, h:12, float:true},
-        {x:2700, y:GROUND_Y-84, w:96, h:12, float:true},
+        {x:0,    y:GY, w:640,  h:32},
+        {x:720,  y:GY, w:760,  h:32},
+        {x:1560, y:GY, w:900,  h:32},
+        {x:2540, y:GY, w:660,  h:32},
+        {x:300,  y:GY-52, w:64, h:12, float:true},
+        {x:520,  y:GY-92, w:64, h:12, float:true},
+        {x:860,  y:GY-60, w:80, h:12, float:true},
+        {x:1180, y:GY-100,w:64, h:12, float:true},
+        {x:1360, y:GY-56, w:64, h:12, float:true},
+        {x:1720, y:GY-80, w:96, h:12, float:true},
+        {x:2000, y:GY-108,w:64, h:12, float:true},
+        {x:2260, y:GY-60, w:80, h:12, float:true},
+        {x:2700, y:GY-84, w:96, h:12, float:true},
       ],
       coins: [
         180,132, 700,132, 980,132, 1300,132, 1620,132, 2200,132, 2900,132,
-        316,GROUND_Y-72, 536,GROUND_Y-112, 876,GROUND_Y-80, 1196,GROUND_Y-120,
-        1376,GROUND_Y-76, 1736,GROUND_Y-100, 2016,GROUND_Y-128, 2276,GROUND_Y-80,
-        2716,GROUND_Y-104,
+        316,GY-72, 536,GY-112, 876,GY-80, 1196,GY-120,
+        1376,GY-76, 1736,GY-100, 2016,GY-128, 2276,GY-80,
+        2716,GY-104,
       ],
       enemies: [
         {x:400, min:360, max:600,  type:'crab'},
-        {x:1000,min:960, max:1200, type:'ball'},
+        {x:1000,min:960, max:1200, type:'crab'},
         {x:1650,min:1600,max:1780, type:'crab'},
-        {x:2150,min:2080,max:2320, type:'ball'},
+        {x:2150,min:2080,max:2320, type:'crab'},
         {x:2620,min:2560,max:2820, type:'crab'},
       ],
-      dress: {x:1120, baseY:GROUND_Y-44},
+      items: [
+        {x:800,  baseY:GY-40, kind:'lipstick'},
+        {x:1360, baseY:GY-40, kind:'shoes'},
+        {x:2980, baseY:GY-44, kind:'dress'},
+      ],
       goalX: 3110,
     },
     { // Level 2 — sunset luau
       theme: 'sunset', width: 2600,
       platforms: [
-        {x:0,    y:GROUND_Y, w:520, h:TILE*2},
-        {x:600,  y:GROUND_Y, w:700, h:TILE*2},
-        {x:1380, y:GROUND_Y, w:520, h:TILE*2},
-        {x:1980, y:GROUND_Y, w:620, h:TILE*2},
-        {x:260,  y:GROUND_Y-56, w:64, h:12, float:true},
-        {x:460,  y:GROUND_Y-96, w:64, h:12, float:true},
-        {x:720,  y:GROUND_Y-64, w:80, h:12, float:true},
-        {x:980,  y:GROUND_Y-104,w:64, h:12, float:true},
-        {x:1180, y:GROUND_Y-60, w:72, h:12, float:true},
-        {x:1480, y:GROUND_Y-88, w:96, h:12, float:true},
-        {x:1740, y:GROUND_Y-112,w:64, h:12, float:true},
-        {x:2020, y:GROUND_Y-64, w:80, h:12, float:true},
-        {x:2260, y:GROUND_Y-92, w:96, h:12, float:true},
+        {x:0,    y:GY, w:520, h:32},
+        {x:600,  y:GY, w:700, h:32},
+        {x:1380, y:GY, w:520, h:32},
+        {x:1980, y:GY, w:620, h:32},
+        {x:260,  y:GY-56, w:64, h:12, float:true},
+        {x:460,  y:GY-96, w:64, h:12, float:true},
+        {x:720,  y:GY-64, w:80, h:12, float:true},
+        {x:980,  y:GY-104,w:64, h:12, float:true},
+        {x:1180, y:GY-60, w:72, h:12, float:true},
+        {x:1480, y:GY-88, w:96, h:12, float:true},
+        {x:1740, y:GY-112,w:64, h:12, float:true},
+        {x:2020, y:GY-64, w:80, h:12, float:true},
+        {x:2260, y:GY-92, w:96, h:12, float:true},
       ],
       coins: [
         160,132, 640,132, 900,132, 1200,132, 1500,132, 2100,132, 2380,132,
-        276,GROUND_Y-76, 476,GROUND_Y-116, 736,GROUND_Y-84, 996,GROUND_Y-124,
-        1196,GROUND_Y-80, 1496,GROUND_Y-108, 1756,GROUND_Y-132, 2036,GROUND_Y-84,
-        2276,GROUND_Y-112,
+        276,GY-76, 476,GY-116, 736,GY-84, 996,GY-124,
+        1196,GY-80, 1496,GY-108, 1756,GY-132, 2036,GY-84,
+        2276,GY-112,
       ],
       enemies: [
         {x:360, min:320, max:520,  type:'ball'},
@@ -353,35 +415,56 @@
         {x:2120,min:2020,max:2320, type:'ball'},
       ],
       dress: null, // she already has the gown; luau reception
+      items: [],
       goalX: 2510,
     },
   ];
+  const SCL = 2; // scale design-space -> world (2x internal resolution)
+  for (const L of levels) {
+    L.width *= SCL; L.goalX *= SCL;
+    for (const p of L.platforms) { p.x *= SCL; p.y *= SCL; p.w *= SCL; p.h *= SCL; }
+    L.coins = L.coins.map(v => v * SCL);
+    for (const e of L.enemies) { e.x *= SCL; e.min *= SCL; e.max *= SCL; }
+    if (L.items) for (const it of L.items) { it.x *= SCL; it.baseY *= SCL; }
+  }
   let level = levels[0], levelIndex = 0;
 
   // ---------- State ----------
-  let player, camX, coins, enemies, dress, score, coinsGot, won, dead, time, flashMsg, flashUntil, confetti;
+  let player, camX, coins, enemies, items, score, coinsGot, won, gameOver, respawning, respawnTimer, started, timeLeft, time, flashMsg, flashUntil, confetti, fireworks, winBonus;
   function startLevel(i, keep) {
     levelIndex = i; level = levels[i];
-    player.x = 40; player.y = GROUND_Y - 40;
+    player.x = 80; player.y = GROUND_Y - 80;
     player.vx = 0; player.vy = 0; player.onGround = false; player.face = 1; player.anim = 0;
-    if (!keep) { player.hasDress = false; score = 0; }
-    camX = 0; coinsGot = 0; won = false; dead = false; confetti = [];
+    if (!keep) { player.hasDress = false; player.hasLipstick = false; player.hasShoes = false; score = 0; }
+    camX = 0; coinsGot = 0; won = false; gameOver = false; respawning = false; confetti = []; fireworks = []; winBonus = 0;
     coins = [];
     for (let k = 0; k < level.coins.length; k += 2)
       coins.push({ x: level.coins[k], y: level.coins[k+1], got: false });
-    enemies = level.enemies.map(e => ({ x:e.x, y:GROUND_Y-16, min:e.min, max:e.max,
+    enemies = level.enemies.map(e => ({ x:e.x, y:GROUND_Y-32, min:e.min, max:e.max,
                                         dir:1, alive:true, sq:0, type:e.type || 'crab', roll:0 }));
-    dress = level.dress ? { x: level.dress.x, y: level.dress.baseY, got: false } : { got: true };
+    items = (level.items || []).map(it => ({ x: it.x, y: it.baseY, kind: it.kind, got: false }));
+    rebuildKim();
     document.getElementById('coinsTotal').textContent = coins.length;
     document.getElementById('score').textContent = score;
     document.getElementById('coins').textContent = coinsGot;
   }
   function reset() {
-    player = { x: 40, y: GROUND_Y - 40, w: 20, h: 40, vx: 0, vy: 0,
-               onGround: false, face: 1, anim: 0, hasDress: false };
-    time = 0; flashMsg = ''; flashUntil = 0; score = 0;
+    player = { x: 80, y: GROUND_Y - 80, w: 40, h: 80, vx: 0, vy: 0,
+               onGround: false, face: 1, anim: 0, hasDress: false, hasLipstick: false, hasShoes: false };
+    time = 0; flashMsg = ''; flashUntil = 0; score = 0; timeLeft = START_TIME; winBonus = 0;
     startLevel(0, false);
     document.getElementById('msg').textContent = '';
+  }
+  function startGame() {
+    if (started) return;
+    started = true; timeLeft = START_TIME;
+    const ov = document.getElementById('intro'); if (ov) ov.classList.add('hidden');
+    initAudio();
+  }
+  function hurt() {
+    if (respawning) return;
+    respawning = true; respawnTimer = 60; // ~1s, then respawn at the level start
+    sfxDie(); flashMsg = '\u2728 Up you get, Kim!'; flashUntil = time + 70;
   }
 
   // ---------- Audio: procedural SFX + looping music (Web Audio) ----------
@@ -437,6 +520,7 @@
   // ---------- Input ----------
   const keys = {};
   addEventListener('keydown', e => {
+    if (!started) { startGame(); return; }
     initAudio();
     keys[e.code] = true;
     if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space'].includes(e.code)) e.preventDefault();
@@ -444,15 +528,16 @@
     if (e.code === 'KeyM') toggleMute();
   });
   addEventListener('keyup', e => { keys[e.code] = false; });
-  addEventListener('pointerdown', initAudio);
+  addEventListener('pointerdown', () => { if (!started) startGame(); else initAudio(); });
 
   // ---------- Touch (tap zones) ----------
   // lower-left = move left, lower-right = move right, upper 45% = jump (multi-touch)
   const touch = { left: false, right: false, jump: false };
   const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
   function updateTouch(e) {
+    if (!started) { if (e.touches.length) startGame(); return; }
     initAudio();
-    if ((won || dead) && e.touches.length) { reset(); touch.left = touch.right = touch.jump = false; return; }
+    if ((won || gameOver) && e.touches.length) { reset(); touch.left = touch.right = touch.jump = false; return; }
     let L = false, R = false, J = false;
     const w = window.innerWidth, h = window.innerHeight;
     for (const t of e.touches) {
@@ -465,7 +550,8 @@
   for (const ev of ['touchstart', 'touchmove', 'touchend', 'touchcancel'])
     addEventListener(ev, e => { e.preventDefault(); updateTouch(e); }, { passive: false });
 
-  const GRAV = 0.30, MOVE = 0.6, FRICTION = 0.82, MAXVX = 2.4, JUMP = 8.2, MAXFALL = 7;
+  const START_TIME = 60 * 60, HEART_TIME = 3 * 60; // 60s to start; each heart +3s (frames @60fps)
+  const GRAV = 0.60, MOVE = 1.2, FRICTION = 0.82, MAXVX = 4.8, JUMP = 16.4, MAXFALL = 14;
 
   function aabb(a, b) {
     return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
@@ -473,7 +559,17 @@
 
   function update() {
     time++;
-    if (won || dead) return;
+    if (!started || won || gameOver) return;
+    timeLeft--;
+    if (timeLeft <= 0) { timeLeft = 0; gameOver = true; sfxDie(); return; } // countdown expired
+    if (respawning) {
+      respawnTimer--;
+      if (respawnTimer <= 0) {
+        respawning = false;
+        player.x = 80; player.y = GROUND_Y - 80; player.vx = 0; player.vy = 0; player.onGround = false; camX = 0;
+      }
+      return; // briefly frozen; the clock still ticked above
+    }
 
     const left = keys.ArrowLeft || keys.KeyA || touch.left;
     const right = keys.ArrowRight || keys.KeyD || touch.right;
@@ -509,75 +605,78 @@
       }
     }
 
-    if (player.y > H + 40) { if (!dead) { dead = true; sfxDie(); } }
+    if (player.y > H + 80) hurt();
 
     camX = player.x - W / 3;
     camX = Math.max(0, Math.min(level.width - W, camX));
 
-    if (!dress.got) {
-      const by = dress.y + Math.sin(time/20) * 3;
-      if (aabb(player, {x:dress.x, y:by, w:24, h:28})) {
-        dress.got = true; player.hasDress = true; score += 500;
-        flashMsg = '👰 GOT THE DRESS!'; flashUntil = time + 120; sfxDress();
+    for (const it of items) {
+      if (it.got) continue;
+      const by = it.y + Math.sin(time/20) * 6;
+      const box = it.kind === 'dress' ? {x:it.x, y:by, w:48, h:56} : {x:it.x, y:by, w:44, h:44};
+      if (aabb(player, box)) {
+        it.got = true;
+        if (it.kind === 'lipstick') { player.hasLipstick = true; score += 200; flashMsg = '\uD83D\uDC84 LIPSTICK!'; }
+        else if (it.kind === 'shoes') { player.hasShoes = true; score += 200; flashMsg = '\uD83D\uDC60 WHITE SHOES!'; }
+        else { player.hasDress = true; score += 500; flashMsg = '\uD83D\uDC70 THE DRESS!'; }
+        flashUntil = time + 120; rebuildKim(); sfxDress();
       }
     }
 
     for (const c of coins) {
       if (c.got) continue;
       if (aabb(player, {x:c.x, y:c.y, w:HEART, h:HEART})) {
-        c.got = true; coinsGot++; score += 100; sfxHeart();
+        c.got = true; coinsGot++; score += 100; timeLeft += HEART_TIME; sfxHeart();
       }
     }
 
     for (const e of enemies) {
       if (!e.alive) { e.sq++; continue; }
-      const sp = e.type === 'ball' ? 1.1 : 0.6;
+      const sp = e.type === 'ball' ? 2.2 : 1.2;
       e.x += e.dir * sp;
       if (e.x < e.min) { e.x = e.min; e.dir = 1; }
       if (e.x > e.max) { e.x = e.max; e.dir = -1; }
       if (e.type === 'ball') e.roll += e.dir * 0.12;
-      const eb = {x:e.x, y:e.y, w:20, h:16};
+      const eb = {x:e.x, y:e.y, w:40, h:32};
       if (aabb(player, eb)) {
-        if (player.vy > 0 && player.y + player.h - eb.y < 20) {
-          e.alive = false; score += 250; player.vy = -6; sfxStomp();
+        if (player.vy > 0 && player.y + player.h - eb.y < 40) {
+          e.alive = false; score += 250; player.vy = -12; sfxStomp();
         } else {
-          if (!dead) { dead = true; sfxDie(); }
+          hurt();
         }
       }
     }
 
     if (player.x > level.goalX) {
-      if (levelIndex < levels.length - 1) {
+      if (items.some(it => !it.got)) {
+        player.x = level.goalX - player.w - 4; // can't finish until everything is collected
+        flashMsg = 'Collect all the items first!'; flashUntil = time + 60;
+      } else if (levelIndex < levels.length - 1) {
         score += 500;
         startLevel(levelIndex + 1, true);
         flashMsg = '🌺 SUNSET LUAU — LEVEL 2!'; flashUntil = time + 170; sfxLevel();
         return;
+      } else {
+        won = true; sfxWin(); spawnConfetti();
+        winBonus = Math.max(0, Math.ceil(timeLeft / 60)) * 100; // fast-finish: leftover seconds
+        score += 1000 + winBonus;
       }
-      won = true; score += 1000; sfxWin(); spawnConfetti();
     }
 
-    player.anim += Math.abs(player.vx) * 0.12;
-
-    document.getElementById('score').textContent = score;
-    document.getElementById('coins').textContent = coinsGot;
-    const msg = document.getElementById('msg');
-    if (won)  msg.innerHTML = '<b style="color:#fff">💍 JUST MARRIED! Press R</b>';
-    else if (dead) msg.innerHTML = '<b style="color:#ff6b6b">OH NO! Press R</b>';
-    else if (time < flashUntil) msg.innerHTML = '<b style="color:#fff">' + flashMsg + '</b>';
-    else msg.textContent = '';
+    player.anim += Math.abs(player.vx) * 0.06;
   }
 
   // ---------- Rendering ----------
   const THEMES = {
     beach: {
       sky:['#4fc0f0','#bfeaff','#ffe9b0'], sun:'rgba(255,245,190,0.95)', sunGlow:'rgba(255,245,190,0.25)',
-      sunX:W-46, sunY:38, sunR:17, cloud:'rgba(255,255,255,0.92)',
+      sunX:W-92, sunY:76, sunR:34, cloud:'rgba(255,255,255,0.92)',
       ocean:['#2fb0dd','#1b8fc0'], glint:'rgba(255,250,210,0.5)', sand:'#e8d29a', foam:'rgba(255,255,255,0.85)',
       trunk:'#a9743f', trunkShade:'#8a5c30', coconut:'#5a3a1e', frond:'#2fa14a', frond2:'#25823c',
     },
     sunset: {
       sky:['#3a2b6b','#ff8a4d','#ffd36b'], sun:'rgba(255,150,70,0.97)', sunGlow:'rgba(255,120,60,0.32)',
-      sunX:W-70, sunY:96, sunR:27, cloud:'rgba(255,190,150,0.85)',
+      sunX:W-140, sunY:192, sunR:54, cloud:'rgba(255,190,150,0.85)',
       ocean:['#e0864a','#4a3a6e'], glint:'rgba(255,215,150,0.55)', sand:'#c99a5e', foam:'rgba(255,225,190,0.8)',
       trunk:'#4a3a2f', trunkShade:'#3a2c24', coconut:'#2a1a12', frond:'#2f5a4a', frond2:'#243f38',
     },
@@ -586,7 +685,7 @@
 
   function drawPalm(bx, baseY, s) {
     ctx.fillStyle = TH.trunk;
-    const segs = 8; let tX = bx, tY = baseY;
+    const segs = 11; let tX = bx, tY = baseY;
     for (let i = 0; i < segs; i++) {
       tY = baseY - i * 4 * s; tX = bx + Math.sin(i * 0.45) * 3 * s;
       ctx.fillRect(Math.round(tX), Math.round(tY), Math.max(2 * s, (4 - i * 0.2) * s), 4 * s);
@@ -624,82 +723,95 @@
     ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
 
     // sun
-    ctx.fillStyle = TH.sunGlow; ctx.beginPath(); ctx.arc(TH.sunX, TH.sunY, TH.sunR + 9, 0, 7); ctx.fill();
+    ctx.fillStyle = TH.sunGlow; ctx.beginPath(); ctx.arc(TH.sunX, TH.sunY, TH.sunR + 18, 0, 7); ctx.fill();
     ctx.fillStyle = TH.sun;     ctx.beginPath(); ctx.arc(TH.sunX, TH.sunY, TH.sunR, 0, 7); ctx.fill();
 
     // clouds
     ctx.fillStyle = TH.cloud;
-    const coff = (camX * 0.15) % 260;
-    for (let i = -1; i < W / 260 + 2; i++) {
-      const cx = i * 260 - coff + 30, cy = 24 + (i % 2) * 20;
-      ctx.beginPath(); ctx.arc(cx, cy, 9, 0, 7); ctx.arc(cx + 11, cy + 3, 12, 0, 7); ctx.arc(cx + 24, cy, 8, 0, 7); ctx.fill();
+    const coff = (camX * 0.15) % 520;
+    for (let i = -1; i < W / 520 + 2; i++) {
+      const cx = i * 520 - coff + 60, cy = 48 + (i % 2) * 40;
+      ctx.beginPath(); ctx.arc(cx, cy, 18, 0, 7); ctx.arc(cx + 22, cy + 6, 24, 0, 7); ctx.arc(cx + 48, cy, 16, 0, 7); ctx.fill();
     }
 
     // ocean band + shore
-    const horizon = 96, shoreTop = 124;
+    const horizon = 192, shoreTop = 248;
     const og = ctx.createLinearGradient(0, horizon, 0, H);
     og.addColorStop(0, TH.ocean[0]); og.addColorStop(1, TH.ocean[1]);
     ctx.fillStyle = og; ctx.fillRect(0, horizon, W, H - horizon);
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 2;
     for (let layer = 0; layer < 4; layer++) {
       ctx.beginPath();
-      const yBase = horizon + 4 + layer * 5, phase = time * 0.05 + layer * 1.3 + camX * 0.003;
-      for (let x = 0; x <= W; x += 2) { const y = yBase + Math.sin(x * 0.06 + phase) * 1.7; if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+      const yBase = horizon + 8 + layer * 10, phase = time * 0.05 + layer * 1.3 + camX * 0.0015;
+      for (let x = 0; x <= W; x += 4) { const y = yBase + Math.sin(x * 0.03 + phase) * 3.4; if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
       ctx.stroke();
     }
     ctx.fillStyle = TH.glint;
-    for (let k = 0; k < 4; k++) ctx.fillRect(TH.sunX - 6 + Math.sin(time * 0.06 + k) * 4, horizon + 4 + k * 4, 8, 1);
+    for (let k = 0; k < 4; k++) ctx.fillRect(TH.sunX - 12 + Math.sin(time * 0.06 + k) * 8, horizon + 8 + k * 8, 16, 2);
 
     // sandy shore in front of the sea
     ctx.fillStyle = TH.sand;
     ctx.beginPath(); ctx.moveTo(0, shoreTop);
-    for (let x = 0; x <= W; x += 4) ctx.lineTo(x, shoreTop + Math.sin(x * 0.08 + time * 0.04) * 2);
+    for (let x = 0; x <= W; x += 8) ctx.lineTo(x, shoreTop + Math.sin(x * 0.04 + time * 0.04) * 4);
     ctx.lineTo(W, GROUND_Y); ctx.lineTo(0, GROUND_Y); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = TH.foam; ctx.beginPath();
-    for (let x = 0; x <= W; x += 4) { const y = shoreTop + Math.sin(x * 0.08 + time * 0.04) * 2; if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+    ctx.strokeStyle = TH.foam; ctx.lineWidth = 2; ctx.beginPath();
+    for (let x = 0; x <= W; x += 8) { const y = shoreTop + Math.sin(x * 0.04 + time * 0.04) * 4; if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
     ctx.stroke();
 
     // palms
-    const palmOff2 = (camX * 0.22) % 420;
-    for (let i = -1; i < W / 420 + 2; i++) drawPalm(i * 420 - palmOff2 + 220, GROUND_Y - 4, 1.3);
-    const palmOff = (camX * 0.4) % 300;
-    for (let i = -1; i < W / 300 + 2; i++) drawPalm(i * 300 - palmOff + 70, GROUND_Y - 2, 2.1);
+    const palmOff2 = (camX * 0.22) % 840;
+    for (let i = -1; i < W / 840 + 2; i++) drawPalm(i * 840 - palmOff2 + 440, GROUND_Y - 8, 2.6);
+    const palmOff = (camX * 0.4) % 600;
+    for (let i = -1; i < W / 600 + 2; i++) drawPalm(i * 600 - palmOff + 140, GROUND_Y - 4, 4.2);
+  }
+
+  function drawArch(gx) {
+    ctx.fillStyle = '#e8d0ff';
+    ctx.fillRect(gx, GROUND_Y - 176, 12, 176);
+    ctx.fillRect(gx + 112, GROUND_Y - 176, 12, 176);
+    ctx.fillRect(gx, GROUND_Y - 176, 124, 12);
+    for (let i = 0; i <= 124; i += 20) {
+      ctx.fillStyle = (i / 20) % 2 ? '#ff8fb0' : '#fff';
+      ctx.fillRect(gx + i - 2, GROUND_Y - 180, 8, 8);
+    }
+    ctx.fillStyle = '#ff8fb0';
+    for (let j = 0; j < 176; j += 24) { ctx.fillRect(gx - 2, GROUND_Y - 176 + j, 8, 8); ctx.fillRect(gx + 114, GROUND_Y - 176 + j, 8, 8); }
   }
 
   function drawHut(gx) {
-    const baseY = GROUND_Y, wallTop = GROUND_Y - 46;
+    const baseY = GROUND_Y, wallTop = GROUND_Y - 92;
     // support posts
     ctx.fillStyle = '#9c6b3f';
-    ctx.fillRect(gx + 6, wallTop, 5, baseY - wallTop);
-    ctx.fillRect(gx + 61, wallTop, 5, baseY - wallTop);
+    ctx.fillRect(gx + 12, wallTop, 10, baseY - wallTop);
+    ctx.fillRect(gx + 122, wallTop, 10, baseY - wallTop);
     // back wall
     ctx.fillStyle = '#caa25e';
-    ctx.fillRect(gx + 11, wallTop, 50, baseY - wallTop);
+    ctx.fillRect(gx + 22, wallTop, 100, baseY - wallTop);
     // plank lines
     ctx.fillStyle = '#b98a4a';
-    for (let wy = wallTop + 6; wy < baseY; wy += 8) ctx.fillRect(gx + 11, wy, 50, 2);
+    for (let wy = wallTop + 12; wy < baseY; wy += 16) ctx.fillRect(gx + 22, wy, 100, 4);
     // doorway
     ctx.fillStyle = '#4a2f18';
-    ctx.fillRect(gx + 28, baseY - 30, 16, 30);
+    ctx.fillRect(gx + 56, baseY - 60, 32, 60);
     // thatched roof (overhanging triangle)
     ctx.fillStyle = '#d3ac54';
     ctx.beginPath();
-    ctx.moveTo(gx - 8, wallTop + 2);
-    ctx.lineTo(gx + 36, wallTop - 24);
-    ctx.lineTo(gx + 80, wallTop + 2);
+    ctx.moveTo(gx - 16, wallTop + 4);
+    ctx.lineTo(gx + 72, wallTop - 48);
+    ctx.lineTo(gx + 160, wallTop + 4);
     ctx.closePath(); ctx.fill();
     // straw layers
-    ctx.strokeStyle = '#a5822f'; ctx.lineWidth = 1;
+    ctx.strokeStyle = '#a5822f'; ctx.lineWidth = 2;
     for (let r = 0; r < 4; r++) {
-      const yy = wallTop - 2 - r * 5;
-      ctx.beginPath(); ctx.moveTo(gx - 6 + r * 5, yy); ctx.lineTo(gx + 78 - r * 5, yy); ctx.stroke();
+      const yy = wallTop - 4 - r * 10;
+      ctx.beginPath(); ctx.moveTo(gx - 12 + r * 10, yy); ctx.lineTo(gx + 156 - r * 10, yy); ctx.stroke();
     }
     // ridge + heart sign
-    ctx.fillStyle = '#8a5c30'; ctx.fillRect(gx + 34, wallTop - 26, 4, 6);
+    ctx.fillStyle = '#8a5c30'; ctx.fillRect(gx + 68, wallTop - 52, 8, 12);
     ctx.fillStyle = '#ff5f8f';
-    ctx.fillRect(gx + 33, wallTop - 34, 6, 5);
-    ctx.fillRect(gx + 31, wallTop - 33, 2, 2); ctx.fillRect(gx + 39, wallTop - 33, 2, 2);
+    ctx.fillRect(gx + 66, wallTop - 68, 12, 10);
+    ctx.fillRect(gx + 62, wallTop - 66, 4, 4); ctx.fillRect(gx + 78, wallTop - 66, 4, 4);
   }
 
   // ----- Confetti (bursts on win) -----
@@ -708,10 +820,20 @@
     confetti = [];
     for (let i = 0; i < 140; i++) confetti.push({
       x: Math.random() * W, y: Math.random() * -H,
-      vx: (Math.random() - 0.5) * 1.2, vy: 1 + Math.random() * 2.2,
-      s: 2 + Math.random() * 3, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.4,
+      vx: (Math.random() - 0.5) * 2.4, vy: 2 + Math.random() * 4.4,
+      s: 4 + Math.random() * 6, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.4,
       c: CONF_COLORS[(Math.random() * CONF_COLORS.length) | 0],
     });
+  }
+  function spawnFirework() {
+    const cx = 60 + Math.random() * (W - 120), cy = 40 + Math.random() * 140;
+    const col = BALL_COLORS[(Math.random() * BALL_COLORS.length) | 0];
+    const n = 26, life = 44 + Math.random() * 24;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2, sp = 1.6 + Math.random() * 2.8;
+      fireworks.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life, max: life, c: col });
+    }
+    if (actx) tone(200 + Math.random() * 240, 0.15, 'triangle', 0.13);
   }
 
   function draw() {
@@ -733,74 +855,122 @@
       }
     }
 
-    if (!dress.got) {
-      const by = dress.y + Math.sin(time/20) * 3;
+    for (const it of items) {
+      if (it.got) continue;
+      const by = it.y + Math.sin(time/20) * 6;
+      const spr = it.kind === 'dress' ? dressItem : it.kind === 'lipstick' ? lipstickItem : shoesItem;
       ctx.fillStyle = 'rgba(255,255,210,0.45)';
-      ctx.beginPath(); ctx.arc(dress.x+12, by+14, 20 + Math.sin(time/10)*2, 0, 7); ctx.fill();
-      ctx.drawImage(dressItem, dress.x, by);
+      ctx.beginPath(); ctx.arc(it.x + spr.width / 2, by + spr.height / 2, spr.width / 2 + 12 + Math.sin(time/10) * 4, 0, 7); ctx.fill();
+      ctx.drawImage(spr, it.x, by);
     }
 
     for (const c of coins) {
       if (c.got) continue;
       const f = Math.floor(time/12) % 2;
-      ctx.drawImage(heartFrames[f], c.x, c.y + (f ? 1 : 0));
+      ctx.drawImage(heartFrames[f], c.x, c.y + (f ? 2 : 0));
     }
 
-    drawHut(level.goalX);
-    ctx.drawImage(groom, level.goalX + 16, GROUND_Y - 44);
+    if (levelIndex === 0) {
+      drawHut(level.goalX); // level 1: hut only, groom not here yet
+    } else {
+      drawArch(level.goalX); // level 2: wedding arch behind the groom
+      let gbob = 0, gface = 1;
+      if (won) { // dance, offset in phase from the bride
+        gbob = -Math.abs(Math.sin(time * 0.18 + 1.6)) * 8;
+        gface = (Math.floor(time / 24) % 2) ? -1 : 1;
+      }
+      const gx = level.goalX + 18, gy = GROUND_Y - groom.height + gbob;
+      ctx.save();
+      if (gface < 0) { ctx.translate(gx + groom.width, gy); ctx.scale(-1, 1); ctx.drawImage(groom, 0, 0); }
+      else ctx.drawImage(groom, gx, gy);
+      ctx.restore();
+    }
 
     for (const e of enemies) {
       if (e.alive) {
-        if (e.type === 'ball') drawBall(e.x + 10, GROUND_Y - 10, 10, e.roll);
-        else ctx.drawImage(crab, e.x-2, e.y-2);
+        if (e.type === 'ball') drawBall(e.x + 20, GROUND_Y - 20, 20, e.roll);
+        else ctx.drawImage(crab, e.x-4, e.y-4);
       } else if (e.sq < 20) {
-        if (e.type === 'ball') { ctx.globalAlpha = 0.7; drawBall(e.x + 10, GROUND_Y - 5, 6, e.roll); ctx.globalAlpha = 1; }
-        else ctx.drawImage(crab, e.x-2, e.y+8, 24, 8);
+        if (e.type === 'ball') { ctx.globalAlpha = 0.7; drawBall(e.x + 20, GROUND_Y - 10, 12, e.roll); ctx.globalAlpha = 1; }
+        else ctx.drawImage(crab, e.x-4, e.y+16, 48, 16);
       }
     }
 
-    // hero — bigger sprite (36x44). Hitbox 20x40, so center: dx=x-8, feet: dy=y-4
+    // hero
     const set = player.hasDress ? dressSet : pjSet;
-    let spr = set.idle, bob = 0;
-    if (!player.onGround) {
+    let spr = set.idle, bob = 0, face = player.face;
+    if (won) {
+      // celebratory dance: hop + sway side to side, cycling the gown-sway frames
+      spr = set.run[Math.floor(time / 12) % set.run.length];
+      bob = -Math.abs(Math.sin(time * 0.18)) * 8;
+      face = (Math.floor(time / 24) % 2) ? 1 : -1;
+    } else if (!player.onGround) {
       spr = set.jump;
     } else if (Math.abs(player.vx) > 0.4) {
       const fi = Math.floor(player.anim) % set.run.length;
       spr = set.run[fi];
-      bob = fi === 0 ? -1 : 0;
+      bob = fi === 0 ? -2 : 0;
     }
-    const dx = player.x - 8, dy = player.y - 4 + bob;
-    ctx.save();
-    if (player.face < 0) { ctx.translate(dx + spr.width, dy); ctx.scale(-1,1); ctx.drawImage(spr, 0, 0); }
-    else ctx.drawImage(spr, dx, dy);
-    ctx.restore();
+    const dx = Math.round(player.x + (player.w - spr.width) / 2);
+    const dy = Math.round(player.y + player.h - spr.height) + bob; // feet planted; bob lifts slightly
+    if (!(respawning && Math.floor(time / 5) % 2)) { // blink while respawning
+      ctx.save();
+      if (face < 0) { ctx.translate(dx + spr.width, dy); ctx.scale(-1,1); ctx.drawImage(spr, 0, 0); }
+      else ctx.drawImage(spr, dx, dy);
+      ctx.restore();
+    }
 
     ctx.restore(); // end world translate
 
     // confetti (screen space, celebrates the win)
     if (confetti.length) {
       for (const p of confetti) {
-        p.x += p.vx; p.y += p.vy; p.vy += 0.02; p.rot += p.vr;
-        if (p.y > H + 6 && won) { p.y = -6; p.x = Math.random() * W; p.vy = 1 + Math.random() * 2.2; }
+        p.x += p.vx; p.y += p.vy; p.vy += 0.04; p.rot += p.vr;
+        if (p.y > H + 12 && won) { p.y = -12; p.x = Math.random() * W; p.vy = 2 + Math.random() * 4.4; }
         ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
         ctx.fillStyle = p.c; ctx.fillRect(-p.s/2, -p.s/2, p.s, p.s);
         ctx.restore();
       }
     }
 
+    // fireworks at the finish
+    if (won && time % 20 === 0) spawnFirework();
+    if (fireworks.length) {
+      for (const f of fireworks) { f.x += f.vx; f.y += f.vy; f.vy += 0.06; f.life--; }
+      fireworks = fireworks.filter(f => f.life > 0);
+      for (const f of fireworks) {
+        ctx.globalAlpha = Math.max(0, f.life / f.max);
+        ctx.fillStyle = f.c; ctx.fillRect(f.x, f.y, 4, 4);
+      }
+      ctx.globalAlpha = 1;
+    }
+
     // tap-zone hints (touch devices only)
     if (isTouch && !won) {
       ctx.save();
-      ctx.globalAlpha = 0.22; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.22; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(0, H * 0.45); ctx.lineTo(W, H * 0.45); ctx.stroke();   // jump band
       ctx.beginPath(); ctx.moveTo(W / 2, H * 0.45); ctx.lineTo(W / 2, H); ctx.stroke();  // L/R divider
       ctx.globalAlpha = 0.5; ctx.fillStyle = '#fff';
-      ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center';
-      ctx.fillText('TAP = JUMP', W / 2, 11);
-      ctx.fillText('\u25C4', W * 0.25, H - 6);
-      ctx.fillText('\u25BA', W * 0.75, H - 6);
+      ctx.font = 'bold 18px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('TAP = JUMP', W / 2, 22);
+      ctx.fillText('\u25C4', W * 0.25, H - 12);
+      ctx.fillText('\u25BA', W * 0.75, H - 12);
       ctx.restore();
     }
+
+    // HUD
+    document.getElementById('score').textContent = score;
+    document.getElementById('coins').textContent = coinsGot;
+    const secLeft = Math.max(0, Math.ceil(timeLeft / 60));
+    const tEl = document.getElementById('time');
+    tEl.textContent = secLeft;
+    tEl.style.color = secLeft <= 10 ? '#ff5b5b' : '#8ee6ff';
+    const msg = document.getElementById('msg');
+    if (won) msg.innerHTML = '<b style="color:#fff">💍 JUST MARRIED! Time bonus +' + winBonus + ' · Press R</b>';
+    else if (gameOver) msg.innerHTML = '<b style="color:#ff6b6b">⏰ TOO LATE! Press R / tap</b>';
+    else if (time < flashUntil) msg.innerHTML = '<b style="color:#fff">' + flashMsg + '</b>';
+    else msg.textContent = '';
   }
 
   function loop() { update(); draw(); requestAnimationFrame(loop); }
