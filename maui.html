@@ -731,7 +731,7 @@
     currentTrack = key;
     if (!el.loop) { try { el.currentTime = 0; } catch (e) {} }
     el.volume = 0;
-    el.play().then(() => { musicTookOver = true; fadeAudio(el, muted ? 0 : MUSIC_VOL); })
+    el.play().then(() => { musicTookOver = true; if (currentTrack === key) fadeAudio(el, muted ? 0 : MUSIC_VOL); else el.pause(); })
              .catch(err => console.warn('[maui music] play() rejected for ' + key + ':', err.name, err.message));
     if (prev && prev !== el) fadeAudio(prev, 0, () => prev.pause());
   }
@@ -740,7 +740,7 @@
     for (const k in musicEls) {
       if (k === except) continue;
       const p = musicEls[k].play();
-      if (p) p.then(() => { musicEls[k].pause(); try { musicEls[k].currentTime = 0; } catch (e) {} }).catch(() => {});
+      if (p) p.then(() => { if (currentTrack !== k) { musicEls[k].pause(); try { musicEls[k].currentTime = 0; } catch (e) {} } }).catch(() => {});
     }
   }
 
