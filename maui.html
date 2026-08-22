@@ -22,7 +22,7 @@
     background: #ffd9ec;
     border: 4px solid #7a3b6e;
     box-shadow: 0 0 24px rgba(0,0,0,.5);
-    width: 640px; height: auto; max-width: 96vw;
+    width: min(96vw, calc(84vh * 16 / 9)); height: auto;
     touch-action: none;
   }
   #hud { margin-top: 10px; font-size: 16px; letter-spacing: 1px; }
@@ -735,6 +735,14 @@
              .catch(err => console.warn('[maui music] play() rejected for ' + key + ':', err.name, err.message));
     if (prev && prev !== el) fadeAudio(prev, 0, () => prev.pause());
   }
+  // Unlock every <audio> within the first user gesture so later (non-gesture) plays work on mobile/iOS.
+  function primeMusic(except) {
+    for (const k in musicEls) {
+      if (k === except) continue;
+      const p = musicEls[k].play();
+      if (p) p.then(() => { musicEls[k].pause(); try { musicEls[k].currentTime = 0; } catch (e) {} }).catch(() => {});
+    }
+  }
 
   // ---------- Input ----------
   const keys = {};
@@ -783,7 +791,7 @@
   })();
   function introAdvance() {
     if (introState === 'prompt') {            // unlock audio + music, roll the cinematic
-      initAudio(); playMusic('menu'); beginCinematic();
+      initAudio(); primeMusic('menu'); playMusic('menu'); beginCinematic();
     } else if (introState === 'playing') {    // skip only if seen on a previous visit
       if (introSeen) startGame();
     } else {                                  // 'ready' — crawl done, begin the game
@@ -860,11 +868,12 @@
     if (wantH !== player.h) { player.h = wantH; player.y = feet - wantH; }
     player.crouching = player.h === 44;
 
-    const spd = player.crouching ? MOVE * 0.45 : MOVE; // crouch-walk is slower
+    const mob = isTouch ? 1.22 : 1;                     // slightly faster on mobile
+    const spd = (player.crouching ? MOVE * 0.45 : MOVE) * mob; // crouch-walk is slower
     if (left)  { player.vx -= spd; player.face = -1; }
     if (right) { player.vx += spd; player.face = 1; }
     if (!left && !right) player.vx *= FRICTION;
-    const maxv = player.crouching ? MAXVX * 0.4 : MAXVX;
+    const maxv = (player.crouching ? MAXVX * 0.4 : MAXVX) * mob;
     player.vx = Math.max(-maxv, Math.min(maxv, player.vx));
 
     if (jump && player.onGround && !player.crouching) { player.vy = -JUMP; player.onGround = false; sfxJump(); }
