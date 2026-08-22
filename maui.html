@@ -735,10 +735,7 @@
     el.play().then(() => { musicTookOver = true; if (currentTrack === key) fadeAudio(el, muted ? 0 : MUSIC_VOL); else el.pause(); })
              .catch(err => console.warn('[maui music] play() rejected for ' + key + ':', err.name, err.message));
   }
-  // iOS/mobile unlock: synchronously play+pause each element within the gesture (silent) so later plays are allowed.
-  function primeMusic() {
-    for (const k in musicEls) { try { const p = musicEls[k].play(); if (p) p.catch(() => {}); musicEls[k].pause(); } catch (e) {} }
-  }
+  // iOS/mobile audio unlocks when the menu track plays inside the first tap gesture (see introAdvance).
 
   // ---------- Input ----------
   const keys = {};
@@ -751,6 +748,7 @@
   try { introSeen = localStorage.getItem(LS_INTRO) === '1'; } catch (e) {}
   let introState = 'prompt';                 // 'prompt' -> 'playing' -> 'ready'
   let introTimers = [];
+  let lastIntroTap = 0;                      // debounce: one physical tap fires touchstart AND pointerdown
   function clearIntroTimers() { introTimers.forEach(clearTimeout); introTimers = []; }
   function beginCinematic() {
     introState = 'playing';
@@ -786,8 +784,11 @@
     if (crawl) crawl.addEventListener('animationend', introFinished);
   })();
   function introAdvance() {
-    if (introState === 'prompt') {            // unlock audio + music, roll the cinematic
-      initAudio(); primeMusic(); playMusic('menu'); beginCinematic();
+    const now = performance.now();
+    if (now - lastIntroTap < 350) return;     // collapse the touchstart+pointerdown double-fire into one action
+    lastIntroTap = now;
+    if (introState === 'prompt') {            // unlock audio (menu play in this gesture) + roll the cinematic
+      initAudio(); playMusic('menu'); beginCinematic();
     } else if (introState === 'playing') {    // skip only if seen on a previous visit
       if (introSeen) startGame();
     } else {                                  // 'ready' — crawl done, begin the game
