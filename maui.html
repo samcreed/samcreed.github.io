@@ -672,10 +672,11 @@
   function toggleMute() {
     muted = !muted;
     if (master) master.gain.value = muted ? 0 : 0.9;
-    if (currentTrack && musicEls[currentTrack]) {
-      const el = musicEls[currentTrack];
+    const el = currentTrack && musicEls[currentTrack];
+    if (el) {
       el._fadeToken = {};                 // cancel any in-flight fade
       el.volume = muted ? 0 : MUSIC_VOL;
+      if (muted) el.pause(); else el.play().catch(() => {});  // iOS ignores volume -> pause/resume to (un)mute
     }
   }
 
@@ -723,25 +724,20 @@
   function playMusic(key) {
     const el = musicEls[key];
     const available = el && musicOk[key] !== false;   // undefined (still buffering) is allowed
-    if (!available) {                                 // no dedicated track for this state:
-      return;                                         // keep whatever is already playing (chiptune fills in only if nothing is)
-    }
+    if (!available) return;                            // missing file -> keep whatever is already playing
     if (currentTrack === key && !el.paused) return;
-    const prev = currentTrack && musicEls[currentTrack];
     currentTrack = key;
+    // Guarantee ONE track at a time: hard-stop every other element.
+    // (iOS ignores the volume property, so pause() is the only reliable control.)
+    for (const k in musicEls) if (k !== key) musicEls[k].pause();
     if (!el.loop) { try { el.currentTime = 0; } catch (e) {} }
     el.volume = 0;
     el.play().then(() => { musicTookOver = true; if (currentTrack === key) fadeAudio(el, muted ? 0 : MUSIC_VOL); else el.pause(); })
              .catch(err => console.warn('[maui music] play() rejected for ' + key + ':', err.name, err.message));
-    if (prev && prev !== el) fadeAudio(prev, 0, () => prev.pause());
   }
-  // Unlock every <audio> within the first user gesture so later (non-gesture) plays work on mobile/iOS.
-  function primeMusic(except) {
-    for (const k in musicEls) {
-      if (k === except) continue;
-      const p = musicEls[k].play();
-      if (p) p.then(() => { if (currentTrack !== k) { musicEls[k].pause(); try { musicEls[k].currentTime = 0; } catch (e) {} } }).catch(() => {});
-    }
+  // iOS/mobile unlock: synchronously play+pause each element within the gesture (silent) so later plays are allowed.
+  function primeMusic() {
+    for (const k in musicEls) { try { const p = musicEls[k].play(); if (p) p.catch(() => {}); musicEls[k].pause(); } catch (e) {} }
   }
 
   // ---------- Input ----------
@@ -791,7 +787,7 @@
   })();
   function introAdvance() {
     if (introState === 'prompt') {            // unlock audio + music, roll the cinematic
-      initAudio(); primeMusic('menu'); playMusic('menu'); beginCinematic();
+      initAudio(); primeMusic(); playMusic('menu'); beginCinematic();
     } else if (introState === 'playing') {    // skip only if seen on a previous visit
       if (introSeen) startGame();
     } else {                                  // 'ready' — crawl done, begin the game
