@@ -62,6 +62,8 @@
   #board h2 { margin: 0 0 6px; color: #ff8fb0; font-size: 22px; }
   #board #board-final { font-size: 14px; margin-bottom: 12px; }
   #board #board-final b { color: #ffd34d; }
+  #board #board-prize { font-size: 13px; margin-bottom: 12px; padding: 8px 10px; border-radius: 8px;
+    background: #4a2542; border: 1px solid #ffd34d; color: #ffe9a8; line-height: 1.4; }
   #board #board-entry { display: flex; gap: 6px; margin-bottom: 8px; }
   #board #board-name { flex: 1; font: inherit; font-size: 16px; text-transform: uppercase; padding: 8px;
     border-radius: 8px; border: 2px solid #7a3b6e; background: #2a1426; color: #fff; min-width: 0; }
@@ -99,6 +101,7 @@
   <div class="board-inner">
     <h2 id="board-title">JUST MARRIED!</h2>
     <div id="board-final"></div>
+    <div id="board-prize">🏆 Top finishers win a special prize at the wedding! 💍</div>
     <div id="board-entry">
       <input id="board-name" maxlength="12" placeholder="YOUR NAME" autocomplete="off" spellcheck="false">
       <button id="board-submit">Submit</button>
