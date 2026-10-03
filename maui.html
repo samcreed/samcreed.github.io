@@ -808,7 +808,7 @@
     if (e.code === 'KeyM') toggleMute();
   });
   addEventListener('keyup', e => { keys[e.code] = false; });
-  addEventListener('pointerdown', () => { if (!started) { introAdvance(); return; } if (boardOpen) return; initAudio(); if (won || gameOver) reset(); });
+  addEventListener('pointerdown', () => { if (!started) { introAdvance(); return; } if (boardOpen) return; initAudio(); if ((won || gameOver) && boardShown) reset(); });
 
   // ---------- Touch (tap zones) ----------
   // lower-left = move left, lower-right = move right, upper 45% = jump (multi-touch)
@@ -817,7 +817,11 @@
   function updateTouch(e) {
     if (!started) { if (e.touches.length) introAdvance(); return; }
     initAudio();
-    if ((won || gameOver) && e.touches.length) { reset(); touch.left = touch.right = touch.jump = touch.down = false; return; }
+    // Only let a tap restart the game once the end-of-game board has actually been shown —
+    // otherwise the tap that crosses the finish line (or the next frame's touchmove) immediately
+    // resets before the player ever sees it, and the score never gets a chance to be saved.
+    if ((won || gameOver) && boardShown && e.touches.length) { reset(); touch.left = touch.right = touch.jump = touch.down = false; return; }
+    if (won || gameOver) return; // end-of-game, board not up yet: ignore all taps (no movement, no accidental restart)
     let L = false, R = false, J = false, D = false;
     const w = window.innerWidth, h = window.innerHeight;
     for (const t of e.touches) {
