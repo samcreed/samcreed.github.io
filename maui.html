@@ -576,6 +576,8 @@
   let player, camX, coins, enemies, items, score, coinsGot, won, gameOver, respawning, respawnTimer, started, timeLeft, time, flashMsg, flashUntil, confetti, fireworks, winBonus, combo, comboTimer, boss, fireballs, bossIFrames;
   let highScore = 0;
   let boardOpen = false, boardShown = false;
+  let boardArmedAt = 0;              // performance.now() when the board opened; Play Again ignores
+  const BOARD_ARM_MS = 800;         // taps for this long after, so a stray end-of-game tap can't dismiss it
   try { highScore = parseInt(localStorage.getItem('mauiHighScore')) || 0; } catch (e) {}
   function saveHigh() { if (score > highScore) { highScore = score; try { localStorage.setItem('mauiHighScore', String(highScore)); } catch (e) {} } }
   function startLevel(i, keep) {
@@ -1602,7 +1604,7 @@
     const dt = Math.min(0.1, (now - lastFrame) / 1000); // clamp big gaps (tab switch) so the clock isn't drained
     lastFrame = now;
     update(dt); draw();
-    if ((won || gameOver) && !boardShown) { boardShown = true; setTimeout(showBoard, 900); }
+    if ((won || gameOver) && !boardShown) { boardShown = true; setTimeout(showBoard, 250); }
     requestAnimationFrame(loop);
   }
   // ---------- Leaderboard (jsonbin.io; falls back to localStorage until configured) ----------
@@ -1657,6 +1659,8 @@
   function showBoard() {
     if (!won && !gameOver) return;   // guard: game may have been restarted during the delay
     boardOpen = true;
+    boardArmedAt = performance.now();  // Play Again is dead until this + BOARD_ARM_MS, so an
+                                       // in-flight finish-line tap can't instantly dismiss the board
     document.getElementById('board-title').textContent = won ? '\uD83D\uDC8D JUST MARRIED!' : '\u23F0 TOO LATE!';
     document.getElementById('board-final').innerHTML = 'Score <b>' + score + '</b> \u00B7 Hearts <b>' + coinsGot + '/' + TOTAL_HEARTS + '</b>';
     const nameEl = document.getElementById('board-name');
@@ -1682,6 +1686,10 @@
   });
   document.getElementById('board-name').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('board-submit').click(); });
   document.getElementById('board-again').addEventListener('click', () => {
+    // Ignore clicks fired within the first BOARD_ARM_MS after the board opened: on mobile a tap
+    // that was in flight as the board appeared (e.g. rapid finish-line tapping) would otherwise
+    // land on this full-width button and dismiss the score screen the instant it showed up.
+    if (performance.now() - boardArmedAt < BOARD_ARM_MS) return;
     document.getElementById('board').classList.add('hidden'); boardOpen = false; reset();
   });
 
