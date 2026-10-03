@@ -808,7 +808,7 @@
     if (e.code === 'KeyM') toggleMute();
   });
   addEventListener('keyup', e => { keys[e.code] = false; });
-  addEventListener('pointerdown', () => { if (!started) { introAdvance(); return; } if (boardOpen) return; initAudio(); if ((won || gameOver) && boardShown) reset(); });
+  addEventListener('pointerdown', () => { if (!started) { introAdvance(); return; } if (won || gameOver) return; initAudio(); });
 
   // ---------- Touch (tap zones) ----------
   // lower-left = move left, lower-right = move right, upper 45% = jump (multi-touch)
@@ -817,11 +817,11 @@
   function updateTouch(e) {
     if (!started) { if (e.touches.length) introAdvance(); return; }
     initAudio();
-    // Only let a tap restart the game once the end-of-game board has actually been shown —
-    // otherwise the tap that crosses the finish line (or the next frame's touchmove) immediately
-    // resets before the player ever sees it, and the score never gets a chance to be saved.
-    if ((won || gameOver) && boardShown && e.touches.length) { reset(); touch.left = touch.right = touch.jump = touch.down = false; return; }
-    if (won || gameOver) return; // end-of-game, board not up yet: ignore all taps (no movement, no accidental restart)
+    // Once the game is won or lost, tapping the screen does NOTHING. Restart is only ever
+    // triggered by the "▶ Play Again" button inside the score board (board-again handler).
+    // This guarantees the player always gets to see the leaderboard and save their score —
+    // the tap that crosses the finish line (or any stray touch) can never restart the game.
+    if (won || gameOver) { touch.left = touch.right = touch.jump = touch.down = false; return; }
     let L = false, R = false, J = false, D = false;
     const w = window.innerWidth, h = window.innerHeight;
     for (const t of e.touches) {
